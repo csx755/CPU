@@ -15,5 +15,6 @@ Thumbs.db
 
 # 仿真输出
 results.txt
+cpu_test
 *.vcd
 *.wdb

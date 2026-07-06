@@ -53,9 +53,9 @@ module ctrl(Op, Funct7, Funct3, Zero,
    wire i_jal  = Op[6]& Op[5]&~Op[4]& Op[3]& Op[2]& Op[1]& Op[0];  // jal 1101111
 
   // generate control signals
- assign RegWrite   = rtype | itype_r | i_jalr | i_jal; // register write
+ assign RegWrite   = rtype | itype_r | itype_l | i_jalr | i_jal; // register write
   assign MemWrite   = stype;                           // memory write
-  assign ALUSrc     = itype_r | stype | i_jal | i_jalr;   // ALU B is from instruction immediate
+  assign ALUSrc     = itype_r | itype_l | stype | i_jal | i_jalr;   // ALU B is from instruction immediate
 
   // signed extension
   // EXT_CTRL_ITYPE_SHAMT 6'b100000
@@ -66,7 +66,7 @@ module ctrl(Op, Funct7, Funct3, Zero,
   // EXT_CTRL_JTYPE	      6'b000001
   assign EXTOp[5] = 0;
   //assign EXTOp[4]    =  i_ori | i_andi | i_jalr;
-  assign EXTOp[4]    =  i_ori;  
+  assign EXTOp[4]    =  i_ori | itype_l;
   assign EXTOp[3]    = stype; 
   assign EXTOp[2]    = sbtype; 
   assign EXTOp[1]    = 0;   
