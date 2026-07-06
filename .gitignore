@@ -1,0 +1,19 @@
+# Vivado 工程缓存文件（可自动重新生成）
+*.cache/
+*.hw/
+*.sim/
+*.runs/
+*.ip_user_files/
+*.gen/
+*.jou
+*.log
+*.str
+
+# 操作系统
+Thumbs.db
+.DS_Store
+
+# 仿真输出
+results.txt
+*.vcd
+*.wdb
