@@ -60,19 +60,35 @@ module ctrl(Op, Funct7, Funct3, Zero,
   // S-type
     wire i_sw   =  stype & ~Funct3[2] &  Funct3[1] & ~Funct3[0]; // sw 010
 
+  // Wave 2: U-type
+    wire i_lui   = ~Op[6]& Op[5]& Op[4]&~Op[3]& Op[2]& Op[1]& Op[0]; // 0110111
+    wire i_auipc = ~Op[6]&~Op[5]& Op[4]&~Op[3]& Op[2]& Op[1]& Op[0]; // 0010111
+
+  // Wave 2: R-type 扩展
+    wire i_sll = rtype & ~Funct7[6]&~Funct7[5]&~Funct7[4]&~Funct7[3]&~Funct7[2]&~Funct7[1]&~Funct7[0] & ~Funct3[2]&~Funct3[1]& Funct3[0]; // sll 0000000 001
+    wire i_srl = rtype & ~Funct7[6]&~Funct7[5]&~Funct7[4]&~Funct7[3]&~Funct7[2]&~Funct7[1]&~Funct7[0] &  Funct3[2]&~Funct3[1]& Funct3[0]; // srl 0000000 101
+    wire i_sra = rtype & ~Funct7[6]& Funct7[5]&~Funct7[4]&~Funct7[3]&~Funct7[2]&~Funct7[1]&~Funct7[0] &  Funct3[2]&~Funct3[1]& Funct3[0]; // sra 0100000 101
+    wire i_xor = rtype & ~Funct7[6]&~Funct7[5]&~Funct7[4]&~Funct7[3]&~Funct7[2]&~Funct7[1]&~Funct7[0] &  Funct3[2]&~Funct3[1]&~Funct3[0]; // xor 0000000 100
+
   // SB-type
     wire i_beq  = sbtype & ~Funct3[2] & ~Funct3[1] & ~Funct3[0]; // beq 000
+    // Wave 2: 分支扩展
+    wire i_bne  = sbtype & ~Funct3[2] & ~Funct3[1] &  Funct3[0]; // bne  001
+    wire i_blt  = sbtype &  Funct3[2] & ~Funct3[1] & ~Funct3[0]; // blt  100
+    wire i_bge  = sbtype &  Funct3[2] & ~Funct3[1] &  Funct3[0]; // bge  101
+    wire i_bltu = sbtype &  Funct3[2] &  Funct3[1] & ~Funct3[0]; // bltu 110
+    wire i_bgeu = sbtype &  Funct3[2] &  Funct3[1] &  Funct3[0]; // bgeu 111
 
   // === 控制信号生成 ===
 
   // RegWrite: 需要写寄存器的指令
-  assign RegWrite = rtype | itype_r | itype_l | i_jalr | i_jal;
+  assign RegWrite = rtype | itype_r | itype_l | i_jalr | i_jal | i_lui | i_auipc;
 
   // MemWrite: 需要写数据存储器的指令（S-type）
   assign MemWrite = stype;
 
   // ALUSrc: ALU 的 B 操作数选择 0=RD2, 1=立即数
-  assign ALUSrc = itype_r | itype_l | stype | i_jal | i_jalr;
+  assign ALUSrc = itype_r | itype_l | stype | i_jal | i_jalr | i_lui | i_auipc;
 
   // EXTOp[5:0] — 独热码，选择立即数格式
   // [5]=ITYPE_SHAMT, [4]=ITYPE, [3]=STYPE, [2]=BTYPE, [1]=UTYPE, [0]=JTYPE
@@ -80,7 +96,7 @@ module ctrl(Op, Funct7, Funct3, Zero,
   assign EXTOp[4] = itype_r & ~(i_slli | i_srli | i_srai) | itype_l | i_jalr; // I-type 12-bit (排除移位指令)
   assign EXTOp[3] = stype;                                          // S-type
   assign EXTOp[2] = sbtype;                                         // B-type
-  assign EXTOp[1] = 1'b0;                                           // U-type (Wave 2)
+  assign EXTOp[1] = i_lui | i_auipc;                                   // U-type
   assign EXTOp[0] = i_jal;                                          // J-type
 
   // WDSel[1:0] — 写回数据选择
@@ -96,11 +112,11 @@ module ctrl(Op, Funct7, Funct3, Zero,
 
   // ALUOp[4:0] — ALU 操作码
   // 编码规则：按指令映射到 5-bit 操作码（见 ctrl_encode_def.v）
-  assign ALUOp[0] = itype_l | stype | i_addi | i_add | i_or | i_ori | i_jalr | i_slli | i_srai | i_sltiu;
-  assign ALUOp[1] = i_jalr | itype_l | stype | i_addi | i_add | i_and | i_andi | i_slli | i_slti | i_sltiu;
-  assign ALUOp[2] = i_sub | i_beq | i_or | i_ori | i_and | i_andi | i_xori | i_slli;
-  assign ALUOp[3] = i_or | i_ori | i_and | i_andi | i_xori | i_slli | i_slti | i_sltiu;
-  assign ALUOp[4] = i_srli | i_srai;
+  assign ALUOp[0] = itype_l | stype | i_addi | i_add | i_or | i_ori | i_jalr | i_slli | i_sll | i_srai | i_sra | i_sltiu | i_lui | i_bne | i_bge | i_bgeu;
+  assign ALUOp[1] = i_jalr | itype_l | stype | i_addi | i_add | i_and | i_andi | i_slli | i_sll | i_slti | i_sltiu | i_auipc | i_blt | i_bge;
+  assign ALUOp[2] = i_sub | i_beq | i_or | i_ori | i_and | i_andi | i_xori | i_xor | i_slli | i_sll | i_bne | i_blt | i_bge;
+  assign ALUOp[3] = i_or | i_ori | i_and | i_andi | i_xori | i_xor | i_slli | i_sll | i_slti | i_sltiu | i_bltu | i_bgeu;
+  assign ALUOp[4] = i_srli | i_srai | i_srl | i_sra;
 
   // DMType — 访存类型 (Wave 3 启用，当前 word-only)
   assign DMType = `dm_word;
