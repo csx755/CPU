@@ -69,6 +69,19 @@ module ctrl(Op, Funct7, Funct3, Zero,
     wire i_srl = rtype & ~Funct7[6]&~Funct7[5]&~Funct7[4]&~Funct7[3]&~Funct7[2]&~Funct7[1]&~Funct7[0] &  Funct3[2]&~Funct3[1]& Funct3[0]; // srl 0000000 101
     wire i_sra = rtype & ~Funct7[6]& Funct7[5]&~Funct7[4]&~Funct7[3]&~Funct7[2]&~Funct7[1]&~Funct7[0] &  Funct3[2]&~Funct3[1]& Funct3[0]; // sra 0100000 101
     wire i_xor = rtype & ~Funct7[6]&~Funct7[5]&~Funct7[4]&~Funct7[3]&~Funct7[2]&~Funct7[1]&~Funct7[0] &  Funct3[2]&~Funct3[1]&~Funct3[0]; // xor 0000000 100
+    // Wave 3: R-type SLT/SLTU
+    wire i_slt  = rtype & ~Funct7[6]&~Funct7[5]&~Funct7[4]&~Funct7[3]&~Funct7[2]&~Funct7[1]&~Funct7[0] & ~Funct3[2]& Funct3[1]&~Funct3[0]; // slt  0000000 010
+    wire i_sltu = rtype & ~Funct7[6]&~Funct7[5]&~Funct7[4]&~Funct7[3]&~Funct7[2]&~Funct7[1]&~Funct7[0] & ~Funct3[2]& Funct3[1]& Funct3[0]; // sltu 0000000 011
+
+  // Wave 3: Load/Store 子类型 (byte/half)
+    wire i_lw  = itype_l & ~Funct3[2] &  Funct3[1] & ~Funct3[0]; // lw  010
+    wire i_lb  = itype_l & ~Funct3[2] & ~Funct3[1] & ~Funct3[0]; // lb  000
+    wire i_lh  = itype_l & ~Funct3[2] & ~Funct3[1] &  Funct3[0]; // lh  001
+    wire i_lbu = itype_l &  Funct3[2] & ~Funct3[1] & ~Funct3[0]; // lbu 100
+    wire i_lhu = itype_l &  Funct3[2] & ~Funct3[1] &  Funct3[0]; // lhu 101
+
+    wire i_sb  = stype & ~Funct3[2] & ~Funct3[1] & ~Funct3[0]; // sb 000
+    wire i_sh  = stype & ~Funct3[2] & ~Funct3[1] &  Funct3[0]; // sh 001
 
   // SB-type
     wire i_beq  = sbtype & ~Funct3[2] & ~Funct3[1] & ~Funct3[0]; // beq 000
@@ -112,14 +125,18 @@ module ctrl(Op, Funct7, Funct3, Zero,
 
   // ALUOp[4:0] — ALU 操作码
   // 编码规则：按指令映射到 5-bit 操作码（见 ctrl_encode_def.v）
-  assign ALUOp[0] = itype_l | stype | i_addi | i_add | i_or | i_ori | i_jalr | i_slli | i_sll | i_srai | i_sra | i_sltiu | i_lui | i_bne | i_bge | i_bgeu;
-  assign ALUOp[1] = i_jalr | itype_l | stype | i_addi | i_add | i_and | i_andi | i_slli | i_sll | i_slti | i_sltiu | i_auipc | i_blt | i_bge;
+  assign ALUOp[0] = itype_l | stype | i_addi | i_add | i_or | i_ori | i_jalr | i_slli | i_sll | i_srai | i_sra | i_sltiu | i_sltu | i_lui | i_bne | i_bge | i_bgeu;
+  assign ALUOp[1] = i_jalr | itype_l | stype | i_addi | i_add | i_and | i_andi | i_slli | i_sll | i_slti | i_slt | i_sltiu | i_sltu | i_auipc | i_blt | i_bge;
   assign ALUOp[2] = i_sub | i_beq | i_or | i_ori | i_and | i_andi | i_xori | i_xor | i_slli | i_sll | i_bne | i_blt | i_bge;
-  assign ALUOp[3] = i_or | i_ori | i_and | i_andi | i_xori | i_xor | i_slli | i_sll | i_slti | i_sltiu | i_bltu | i_bgeu;
+  assign ALUOp[3] = i_or | i_ori | i_and | i_andi | i_xori | i_xor | i_slli | i_sll | i_slti | i_slt | i_sltiu | i_sltu | i_bltu | i_bgeu;
   assign ALUOp[4] = i_srli | i_srai | i_srl | i_sra;
 
-  // DMType — 访存类型 (Wave 3 启用，当前 word-only)
-  assign DMType = `dm_word;
+  // DMType — 访存类型 (Wave 3: byte/halfword/word)
+  assign DMType = (i_lb | i_sb)  ? `dm_byte :
+                  (i_lbu)        ? `dm_byte_unsigned :
+                  (i_lh | i_sh)  ? `dm_halfword :
+                  (i_lhu)        ? `dm_halfword_unsigned :
+                                   `dm_word;
 
   // GPRSel — 通用寄存器选择 (预留，未用)
   assign GPRSel = `GPRSel_RD;
