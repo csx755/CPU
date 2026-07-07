@@ -1,14 +1,18 @@
 
-  module RF(   input         clk, 
+  module RF(   input         clk,
                input         rst,
-               input         RFWr, 
-               input  [4:0]  A1, A2, A3, 
-               input  [31:0] WD, 
-               output [31:0] RD1, RD2);
+               input         RFWr,
+               input  [4:0]  A1, A2, A3,
+               input  [31:0] WD,
+               output [31:0] RD1, RD2,
+               input  [4:0]  reg_sel,
+               output [31:0] reg_data);
 
   reg [31:0] rf[31:0];
 
   integer i;
+
+  initial for (i = 0; i < 32; i = i + 1) rf[i] = 0;
 
   always @(posedge clk, posedge rst)
     if (rst) begin    //  reset
@@ -27,8 +31,11 @@
       end
     
 
+  // 单周期 CPU 中 RFWr 是当前指令的译码输出, 非上一周期
+  // 同步写 + 组合读 = 无 RAW 冒险 (写发生在 posedge, 下一指令读的是已提交值)
+  // 若加上转发反而在同指令读写同寄存器时产生组合环
   assign RD1 = (A1 != 0) ? rf[A1] : 0;
   assign RD2 = (A2 != 0) ? rf[A2] : 0;
-  //assign reg_data = (reg_sel != 0) ? rf[reg_sel] : 0; 
+  assign reg_data = rf[reg_sel];
 
-endmodule 
+endmodule

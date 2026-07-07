@@ -14,7 +14,7 @@ module MIO_BUS (
 );
 
     //-------------- 地址解码 --------------
-    wire is_RAM        = (addr_bus[31:12] == 20'h0) && (addr_bus[11:0] < 12'h1000); // 0x00000 ~ 0x00FFF
+    wire is_RAM        = (addr_bus[31:12] == 20'd0); // 0x00000 ~ 0x00FFF
     wire is_SPIO       = (addr_bus == 32'hFFFF_F000);
     wire is_Multi8CH32 = (addr_bus == 32'hFFFF_F004);
     wire is_Counter    = (addr_bus == 32'hFFFF_F008);

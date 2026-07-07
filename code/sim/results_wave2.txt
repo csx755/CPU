@@ -1,0 +1,17 @@
+=== Wave 2 测试结果 ===
+x1  LUI+ADDI  = 0x12345678   OK
+x3  AUIPC     = 0x00000008
+x8  SLL       = 0x00000140   OK
+x9  SRL       = 0x04000000   OK
+x10 SRA       = 0xfc000000   OK
+x11 XOR       = 0x0000001e   OK
+x12 XOR self  = 0x00000000   OK
+x13 BNE       = 0x00000001   OK
+x14 BEQ(no)   = 0x00000001   OK
+x15 BLT       = 0x00000002   OK
+x16 BGE       = 0x00000003   OK
+x17 BLTU      = 0x00000004   OK
+x18 BGEU      = 0x00000005   OK
+DM[0x00]=0x12345678   OK
+DM[0x08]=0x00000140   OK
+DM[0x14]=0x0000001e   OK

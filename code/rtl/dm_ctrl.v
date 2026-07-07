@@ -10,11 +10,11 @@ module dm_ctrl(
     input           mem_w,              // 写使能 (1=写, 0=读)
     input  [31:0]   Addr_in,            // 访存地址
     input  [31:0]   Data_write,         // 写数据 (来自 MIO_BUS)
-    input  [2:0]    dm_ctrl,            // 访存类型编码 (与模块同名, Verilog 合法)
+    input  [2:0]    dm_ctrl,            // 访存类型
     input  [31:0]   Data_read_from_dm,  // RAM 原始读数据 (来自 MIO_BUS)
     output [31:0]   Data_read,          // 处理后读数据 → SCPU
     output [31:0]   Data_write_to_dm,   // 对齐后写数据 → RAM_B
-    output [3:0]    wea_mem             // 字节写使能 → RAM_B
+    output [3:0]    wea_mem             // 字节-写使能
 );
 
 // =============================================================================
@@ -70,7 +70,7 @@ always @(*) begin
             end
         endcase
     end else begin
-        // 读操作：不写 RAM
+        // 读操作
         wea        = 4'b0000;
         write_data = 32'b0;
     end

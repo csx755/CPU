@@ -123,9 +123,7 @@ module SSeg7(
                         3'd7: content_seg <= hex2seg(Hexs[31:28]);
                         default: content_seg <= 8'b11111111;
                     endcase
-                    // 小数点
-                    if (point[digit])
-                        content_seg[7] <= 1'b0;
+                    // 小数点暂禁用 (point_in 接 clkdiv 导致频闪)
                 end
             end
 

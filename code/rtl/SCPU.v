@@ -1,19 +1,21 @@
 `include "ctrl_encode_def.v"
+//SCPU包括SCPU.v和ctrl.v、PC.v、NPC.v、EXT.v、RF.v、alu.v等模块
 module SCPU(
-    input      clk,            // clock
-    input      reset,          // reset
-    input [31:0]  inst_in,     // instruction
-    input [31:0]  Data_in,     // data from data memory
+    input           clk,            // CPU 时钟
+    input           reset,          // 复位 (高有效)
+    input           MIO_ready,      // [总线] MIO 就绪 (1=数据已就绪)
+    input  [31:0]   inst_in,        // 指令输入
+    input  [31:0]   Data_in,        // Load 数据输入
+    input           INT,            // 中断信号 (单周期 CPU 未使用)
 
-    output    mem_w,          // output: memory write signal
-    output [31:0] PC_out,     // PC address
-      // memory write
-    output [31:0] Addr_out,   // ALU output
-    output [31:0] Data_out,// data to data memory
-    output [2:0] DMType_out, // 访存类型 (Wave 3)
-
-    input  [4:0] reg_sel,    // register selection (for debug use)
-    output [31:0] reg_data  // selected register data (for debug use)
+    output          mem_w,          // 数据存储器写使能
+    output          CPU_MIO,        // [总线] CPU 访存请求 (1=正在访存)
+    output [31:0]   PC_out,         // PC 输出
+    output [31:0]   Addr_out,       // ALU 结果 / 访存地址
+    output [31:0]   Data_out,       // 写数据 (Store)
+    output [2:0]    dm_ctrl,        // 访存类型编码
+    input  [4:0]    reg_sel,        // [调试] 寄存器选择
+    output [31:0]   reg_data        // [调试] 寄存器数据输出
 );
     wire        RegWrite;    // control signal to register write
     wire [5:0]       EXTOp;       // control signal to signed extension
@@ -73,7 +75,7 @@ assign Addr_out=aluout;
 		.RegWrite(RegWrite), .MemWrite(mem_w),
 		.EXTOp(EXTOp), .ALUOp(ALUOp), .NPCOp(NPCOp),
 		.ALUSrc(ALUSrc), .GPRSel(GPRSel), .WDSel(WDSel),
-		.DMType(DMType_out)
+		.DMType(dm_ctrl)
 	);
  // instantiation of pc unit
 	PC U_PC(.clk(clk), .rst(reset), .NPC(NPC), .PC(PC_out) );
@@ -85,15 +87,19 @@ assign Addr_out=aluout;
 	);
 	RF U_RF(
 		.clk(clk), .rst(reset),
-		.RFWr(RegWrite), 
-		.A1(rs1), .A2(rs2), .A3(rd), 
-		.WD(WD), 
-		.RD1(RD1), .RD2(RD2)
-		//.reg_sel(reg_sel),
-		//.reg_data(reg_data)
+		.RFWr(RegWrite),
+		.A1(rs1), .A2(rs2), .A3(rd),
+		.WD(WD),
+		.RD1(RD1), .RD2(RD2),
+		.reg_sel(reg_sel),
+		.reg_data(reg_data)
 	);
 // instantiation of alu unit
 	alu U_alu(.A(RD1), .B(B), .ALUOp(ALUOp), .C(aluout), .Zero(Zero), .PC(PC_out));
+
+// CPU_MIO: CPU 访存请求 (Load 或 Store 均有效)
+// 与老师原版 SCPU 接口一致, 用于 MIO_BUS 握手
+assign CPU_MIO = mem_w | (WDSel == `WDSel_FromMEM);
 
 //please connnect the CPU by yourself
 always @*

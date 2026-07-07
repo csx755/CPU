@@ -16,15 +16,17 @@ module sccomp(clk, rstn, reg_sel, reg_data, PC, instr);
    SCPU U_SCPU(
          .clk(clk),                  // input:  cpu clock
          .reset(rst),                // input:  reset
+         .MIO_ready(1'b1),           // input:  bus always ready (standalone)
          .inst_in(instr),            // input:  instruction
          .Data_in(dm_dout),          // input:  data to cpu
          .mem_w(MemWrite),           // output: memory write signal
+         .CPU_MIO(),                 // output: bus request (unused standalone)
          .PC_out(PC),                // output: PC
          .Addr_out(dm_addr),         // output: address from cpu to memory
          .Data_out(dm_din),          // output: data from cpu to memory
-         .DMType_out(dm_type),       // output: memory access type (Wave 3)
-         .reg_sel(reg_sel),          // input:  register selection
-         .reg_data(reg_data)         // output: register data
+         .dm_ctrl(dm_type),          // output: memory access type
+         .reg_sel(reg_sel),          // input:  register selection (debug)
+         .reg_data(reg_data)         // output: register data (debug)
          );
 
   // instantiation of data memory

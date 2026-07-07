@@ -1,24 +1,23 @@
-// 时钟分频器：100MHz → ~2Hz (慢速) / 按钮单步
+`timescale 1ns / 1ps
 module clk_div(
-    input  clk_100mhz,       // 100MHz 板载时钟
-    input  rst,
-    input  step_mode,        // 0=连续慢速, 1=按钮单步
-    input  step_btn,         // 单步按钮
-    output cpu_clk           // CPU 时钟
+    input               clk,
+    input               rst,
+    input               SW2,
+    output reg [31:0]   clkdiv,
+    output              Clk_CPU
 );
-    // 100MHz → 2Hz: 50,000,000 分频 → 26-bit 计数器
-    reg [25:0] counter;
-    wire slow_clk;
-    assign slow_clk = counter[25];  // 最高位 ≈ 1.49Hz
 
-    always @(posedge clk_100mhz or posedge rst) begin
-        if (rst)
-            counter <= 26'b0;
-        else
-            counter <= counter + 1;
+    initial begin
+        clkdiv = 32'b0;
     end
 
-    // 模式选择
-    assign cpu_clk = step_mode ? step_btn : slow_clk;
+    always @(posedge clk or posedge rst) begin
+        if (rst)
+            clkdiv <= 32'b0;
+        else
+            clkdiv <= clkdiv + 1'b1;
+    end
+
+    assign Clk_CPU = (SW2) ? clkdiv[24] : clkdiv[3];
 
 endmodule
