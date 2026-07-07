@@ -56,15 +56,15 @@ wire [31:0] PC, Addr_out, Data_out;
 wire [31:0] inst_in, Data_in;
 wire        mem_w;
 wire [2:0]  dm_ctrl;
-wire        CPU_MIO, MIO_ready;
+// wire        CPU_MIO, MIO_ready;  // [参考] 新版 SCPU 无 MIO 握手
 
-// CPU_MIO ↔ MIO_ready 自环
-assign MIO_ready = CPU_MIO;
+// [参考] 新版 SCPU 无 MIO 握手
+// assign MIO_ready = CPU_MIO;
 
 SCPU U_SCPU (
     .clk        (Clk_CPU),
     .reset      (rst),
-    .MIO_ready  (MIO_ready),
+    // .MIO_ready  (MIO_ready),     // [参考] 新版 SCPU 无此端口
     .inst_in    (inst_in),
     .Data_in    (Data_in),
     .INT        (counter0_out),     // 计数器0溢出 → CPU中断
@@ -72,8 +72,8 @@ SCPU U_SCPU (
     .PC_out     (PC),
     .Addr_out   (Addr_out),
     .Data_out   (Data_out),
-    .dm_ctrl    (dm_ctrl),
-    .CPU_MIO    (CPU_MIO)
+    .dm_ctrl    (dm_ctrl)
+    // .CPU_MIO    (CPU_MIO)         // [参考] 新版 SCPU 无此端口
 );
 
 // =============================================================================
@@ -91,8 +91,7 @@ wire [31:0] douta, dina;
 wire [3:0]  wea_mem;
 
 RAM_B U_RAM_B (
-    .clka       (Clk_CPU),          // 时钟
-    .ena        (1'b1),             // 始终使能
+    .clka       (~clk),              // 反相时钟
     .wea        (wea_mem),          // 字节写使能 [3:0]
     .addra      (ram_addr),         // 字地址
     .dina       (dina),             // 写数据
@@ -114,7 +113,7 @@ wire        data_ram_we;            // wea_mio
 wire [31:0] Cpu_data4bus;           // → dm_controller.Data_read_from_dm
 
 MIO_BUS U_MIO_BUS (
-    .clk                (Clk_CPU),
+    .clk                (clk),          // ← 系统时钟直连
     .rst                (rst),
     .BTN                (BTN_OK),
     .SW                 (SW_OK),
@@ -139,11 +138,11 @@ MIO_BUS U_MIO_BUS (
 );
 
 // =============================================================================
-// dm_controller — 数据存储器访问控制器 (老师 .edf 黑盒)
+// dm_ctrl — 数据存储器访问控制器 (手写模块, 替换原 .edf 黑盒)
 // =============================================================================
 wire [31:0] Data_write_to_dm;
 
-dm_controller U_dm_controller (
+dm_ctrl U_dm_ctrl (
     .mem_w                  (mem_w),
     .Addr_in                (Addr_out),
     .Data_write             (ram_data_in),      // ← MIO_BUS.ram_data_in
@@ -164,11 +163,11 @@ wire [1:0]  counter_ch;
 wire        counter0_OUT, counter1_OUT, counter2_OUT;
 
 Counter_x U_Counter_x (
-    .clk            (Clk_CPU),
+    .clk            (~Clk_CPU),        // 反相时钟
     .rst            (rst),
-    .clk0           (clkdiv[25]),
-    .clk1           (clkdiv[28]),
-    .clk2           (clkdiv[30]),
+    .clk0           (clkdiv[6]),        // 100M/2^7 ≈ 780kHz
+    .clk1           (clkdiv[9]),        // 100M/2^10 ≈ 97kHz
+    .clk2           (clkdiv[11]),       // 100M/2^12 ≈ 24kHz
     .counter_we     (counter_we),
     .counter_val    (CPU2IO),
     .counter_ch     (counter_ch),
@@ -186,15 +185,17 @@ assign counter2_out = counter2_OUT;
 // =============================================================================
 // SPIO — LED 外设控制器 (老师 .edf 黑盒)
 // =============================================================================
+wire [13:0] GPIOf0_unused;              // SPIO.GPIOf0 引出但未使用 (参照标准答案)
+
 SPIO U_SPIO (
-    .clk            (Clk_CPU),
+    .clk            (~Clk_CPU),        // 反相时钟
     .rst            (rst),
-    .EN             (GPIOFO),          // ← MIO_BUS.GPIOf0000000_we
+    .EN             (GPIOFO),           // ← MIO_BUS.GPIOf0000000_we
     .P_Data         (CPU2IO),          // ← MIO_BUS.Peripheral_in
     .counter_set    (counter_ch),      // → Counter_x.counter_ch
     .LED_out        (LED_out),         // → MIO_BUS.led_out
     .led            (led_o),           // → 板子 led_o[15:0]
-    .GPIOf0         ()                 // 悬空
+    .GPIOf0         (GPIOf0_unused)    // 参照标准答案, 连接但未使用
 );
 
 // =============================================================================
@@ -204,19 +205,19 @@ wire [31:0] Disp_num;
 wire [7:0]  point_out, LE_out;
 
 Multi_8CH32 U_Multi_8CH32 (
-    .clk            (Clk_CPU),
+    .clk            (~Clk_CPU),        // 反相时钟
     .rst            (rst),
-    .EN             (GPIOEO),          // ← MIO_BUS.GPIOe0000000_we
-    .Switch         (SW_OK[7:5]),      // SW[7:5] 选择通道
+    .EN             (GPIOEO),           // ← MIO_BUS.GPIOe0000000_we (参照标准答案)
+    .Switch         (SW_OK[7:5]),      // 参照标准答案, 不取反
     .point_in       ({clkdiv, clkdiv}),// [已知问题] 32→64 位宽不匹配,复制拼接
-    .LES            (64'h0000_0000_0000_0000),  // 接地
+    .LES            ({64{1'b1}}),       // 所有通道全亮
     .data0          (CPU2IO),          // 外设数据
     .data1          ({2'b0, PC[31:2]}),// PC 字地址
     .data2          (inst_in),         // 当前指令
     .data3          (counter_out),     // 计数器值
     .data4          (Addr_out),        // ALU 地址
     .data5          (Data_out),        // 写数据
-    .data6          (Data_in),         // Load 数据
+    .data6          (Cpu_data4bus),     // MIO_BUS 返回给 CPU 的数据 (参照标准答案)
     .data7          (PC),              // PC 完整值
     .point_out      (point_out),
     .LE_out         (LE_out),
@@ -227,15 +228,15 @@ Multi_8CH32 U_Multi_8CH32 (
 // SSeg7 — 7 段数码管驱动 (老师 .edf 黑盒)
 // =============================================================================
 SSeg7 U_SSeg7 (
-    .clk            (clkdiv[16]),      // 扫描时钟 ≈ 762Hz (100MHz/2^17)
+    .clk            (clk),              // 直连系统时钟 (参照标准答案)
     .rst            (rst),
-    .SW0            (clkdiv[0]),       // 显示模式自动翻转
-    .flash          (clkdiv[10]),      // 闪烁控制
-    .Hexs           (Disp_num),        // ← Multi_8CH32.Disp_num
+    .SW0            (SW_OK[0]),         // SW[0] 文本/图形 (参照标准答案)
+    .flash          (clkdiv[10]),       // PWM 调光
+    .Hexs           (Disp_num),
     .point          (point_out),
     .LES            (LE_out),
-    .seg_an         (disp_an_o),       // → 板子
-    .seg_sout       (disp_seg_o)       // → 板子
+    .seg_an         (disp_an_o),
+    .seg_sout       (disp_seg_o)
 );
 
 endmodule
