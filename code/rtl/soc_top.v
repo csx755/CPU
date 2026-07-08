@@ -60,32 +60,35 @@ clk_div U_clk_div (
 );
 
 // =============================================================================
-// SCPU �? 单周�? CPU (老师 .edf 黑盒)
+// SCPU — 5 级流水线 CPU (替换老师 .edf 黑盒)
+// 模块: SCPU_pipelined + GRE_array + Hazard_Unit + Forwarding_Unit
 // =============================================================================
 // SCPU 中间信号
 wire [31:0] PC, Addr_out, Data_out;
 wire [31:0] inst_in, Data_in;
 wire        mem_w;
 wire [2:0]  dm_ctrl;
-wire        CPU_MIO, MIO_ready;  // SCPU-MIO_BUS handshake
-// wire        CPU_MIO, MIO_ready;  // [参�?�] 新版 SCPU �? MIO 握手
+wire        CPU_MIO, MIO_ready;
+wire [31:0] reg_data_debug;     // 寄存器调试输出 (流水线暂不使用)
 
-// [参�?�] 新版 SCPU �? MIO 握手
+// [MIO 握手] 自环: CPU 发起访存即视为总线就绪
 assign MIO_ready = CPU_MIO;
 
-SCPU U_SCPU (
+SCPU_pipelined U_SCPU (
     .clk        (Clk_CPU),
     .reset      (rst),
-    .MIO_ready  (MIO_ready),        // MIO handshake参�?�] 新版 SCPU 无此端口
+    .MIO_ready  (MIO_ready),
     .inst_in    (inst_in),
     .Data_in    (Data_in),
-    .INT        (counter0_out),     // 计数�?0溢出 �? CPU中断
+    .INT        (counter0_out),     // 计数器0溢出 → CPU 中断
     .mem_w      (mem_w),
     .PC_out     (PC),
     .Addr_out   (Addr_out),
     .Data_out   (Data_out),
-    .dm_ctrl    (dm_ctrl)
-    .CPU_MIO    (CPU_MIO)           // MIO handshake参�?�] 新版 SCPU 无此端口
+    .dm_ctrl    (dm_ctrl),
+    .CPU_MIO    (CPU_MIO),
+    .reg_sel    (5'd0),             // 调试: 寄存器选择 (暂不用)
+    .reg_data   (reg_data_debug)    // 调试: 寄存器值输出
 );
 
 // =============================================================================
