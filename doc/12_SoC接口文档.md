@@ -154,7 +154,8 @@
 
 ### 3.5 MIO_BUS — 存储器映射 IO 总线（手写模块）
 
-> 纯组合逻辑地址解码 + 数据路由。clk/rst 保留接口兼容但未使用。
+> 纯组合逻辑地址解码 + 数据路由。采用 `addr_bus[31:28]` 粗粒度范围解码（老师方案）。
+> clk/rst/PC 保留接口兼容但未使用。
 
 
 | 端口                    | 方向   | 位宽 | 连接目标                                                | 说明                     |
@@ -163,7 +164,7 @@
 | `rst`                   | input  | 1    | ~rstn                                                   | 复位 (未使用)            |
 | `BTN[4:0]`              | input  | 5    | Enter.BTN_out                                           | 按键状态                 |
 | `SW[15:0]`              | input  | 16   | Enter.SW_out                                            | 拨码开关                 |
-| `PC[31:0]`              | input  | 32   | SCPU.PC_out                                             | PC 值                    |
+| `PC[31:0]`              | input  | 32   | SCPU.PC_out                                             | PC 值 (未使用)           |
 | `mem_w`                 | input  | 1    | SCPU.mem_w                                              | 写使能                   |
 | `Cpu_data2bus[31:0]`    | input  | 32   | SCPU.Data_out                                           | CPU 写数据               |
 | `addr_bus[31:0]`        | input  | 32   | SCPU.Addr_out                                           | CPU 地址                 |
@@ -175,21 +176,29 @@
 | `ram_data_in[31:0]`     | output | 32   | dm_ctrl.Data_write                                      | RAM 写数据               |
 | `ram_addr[9:0]`         | output | 10   | RAM_B.addra                                             | RAM 字地址               |
 | `data_ram_we`           | output | 1    | (中间信号)                                              | RAM 写使能               |
-| `GPIOf0000000_we`       | output | 1    | SPIO.EN (GPIOFO)                                        | LED 写使能               |
-| `GPIOe0000000_we`       | output | 1    | Multi_8CH32.EN (GPIOEO)                                 | 数码管写使能 (单周期脉冲)|
-| `counter_we`            | output | 1    | Counter_x.counter_we                                    | 计数器写使能             |
+| `GPIOf0000000_we`       | output | 1    | SPIO.EN (GPIOFO)                                        | LED 写使能 (所有 0xF 写) |
+| `GPIOe0000000_we`       | output | 1    | Multi_8CH32.EN (GPIOEO)                                 | 数码管写使能 (所有 0xE 写)|
+| `counter_we`            | output | 1    | Counter_x.counter_we                                    | 计数器写使能 (0xF+子地址)|
 | `Peripheral_in[31:0]`   | output | 32   | data0 + SPIO.P_Data + Counter_x.counter_val (CPU2IO)    | 外设数据 (扇出三路)      |
 
-**地址空间映射**：
+**地址解码方案**（基于 `addr_bus[31:28]` 粗粒度）：
 
-| 地址 | 设备 | 读 | 写 |
-|------|------|----|----|
-| `0x0000_0000 ~ 0x0000_0FFF` | RAM_B | ram_data_out | Cpu_data2bus |
-| `0xFFFF_F000` | SPIO (LED) | {16'b0, led_out} | Peripheral_in |
-| `0xFFFF_F004` | Multi_8CH32 (数码管) | 0 | Peripheral_in |
-| `0xFFFF_F008` | Counter_x | {counter_out[31:3], overflow[2:0]} | Peripheral_in |
-| `0xFFFF_F010` | SW 拨码开关 | {16'b0, SW} | — |
-| `0xFFFF_F014` | BTN 按键 | {27'b0, BTN} | — |
+| 范围 `[31:28]` | 类别 | 读数据 | 写使能 |
+|----------------|------|--------|--------|
+| `0xF` (1111)   | GPIO 外设: SPIO + Counter + SW + BTN | LED 回读 `{14'b0, led_out, 2'b00}` 或子地址数据 | `GPIOf0000000_we` (所有写) + `counter_we` (子地址 0x08) |
+| `0xE` (1110)   | Seg7 显示: Multi_8CH32 | `{11'b0, BTN, SW}` (合并回读) | `GPIOe0000000_we` (所有写) |
+| 其他           | RAM 数据存储器 | `ram_data_out` | `data_ram_we` |
+
+**子地址映射**（0xF 范围内，`addr_bus[7:0]`）：
+
+| 子地址 | 读操作 | 写操作 |
+|--------|--------|--------|
+| `0x00`~`0x07` | `{14'b0, led_out, 2'b00}` (LED) | `GPIOf0000000_we=1` → SPIO 锁存 |
+| `0x08`~`0x0F` | `{counter_out[31:3], overflow[2:0]}` (Counter) | `GPIOf0000000_we=1` + `counter_we=1` |
+| `0x10`~`0x13` | `{16'b0, SW}` (拨码开关) | `GPIOf0000000_we=1` |
+| `0x14`~`0x1F` | `{27'b0, BTN}` (按键) | `GPIOf0000000_we=1` |
+
+> **注意**：写 0xF 范围任意地址均置位 `GPIOf0000000_we`（SPIO 使能），程序需保证 `Cpu_data2bus` 对 SPIO 无害。0xE 范围写置位 `GPIOe0000000_we`（Multi_8CH32 使能）。
 
 ---
 
