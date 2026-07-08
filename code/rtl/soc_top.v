@@ -15,10 +15,21 @@ module soc_top(
 );
 
 // =============================================================================
-// 全局复位 (低→�?)
+// 全局复位同步器 (消除异步 rstn 释放的亚稳态 + 跨时钟沿问题)
+// rstn 经 2 级同步 → rst_synced, 确保所有模块同时看到复位释放
 // =============================================================================
+reg rst_sync1, rst_sync2;
+always @(posedge clk or negedge rstn) begin
+    if (!rstn) begin
+        rst_sync1 <= 1'b0;
+        rst_sync2 <= 1'b0;
+    end else begin
+        rst_sync1 <= 1'b1;
+        rst_sync2 <= rst_sync1;
+    end
+end
 wire rst;
-assign rst = ~rstn;
+assign rst = ~rst_sync2;
 
 // =============================================================================
 // Enter �? 按键/�?关输�? (TODO: 消抖)

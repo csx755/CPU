@@ -18,7 +18,9 @@ module Hazard_Unit (
                               (ID_EX_rd == ID_rs2 && ID_rs2 != 5'd0));
 
     // 冲刷信号: JAL (ID 级) 或分支成立 (EX 级)
-    assign IF_ID_flush = ID_is_JAL | EX_taken;
+    // 仅 JAL (ID 级检测) 冲 IF/ID; EX 分支依赖 ID_EX_flush 冲 ID 级
+    // EX_taken 时 NPC 已指向目标, IF 取的正是目标指令, 不应冲掉
+    assign IF_ID_flush = ID_is_JAL;
 
     // ID/EX 冲刷: Load-Use (插入气泡) 或分支成立
     assign ID_EX_flush = load_use_hazard | EX_taken;
