@@ -105,9 +105,10 @@ assign CPU_MIO = mem_w | (WDSel == `WDSel_FromMEM);
 always @*
 begin
 	case(WDSel)
-		`WDSel_FromALU: WD<=aluout;
-		`WDSel_FromMEM: WD<=Data_in;
-		`WDSel_FromPC: WD<=PC_out+4;
+		`WDSel_FromALU: WD = aluout;
+		`WDSel_FromMEM: WD = Data_in;
+		`WDSel_FromPC:  WD = PC_out + 4;
+		default:        WD = aluout;     // 2'b11 never appears, prevents latch
 	endcase
 end
 

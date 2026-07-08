@@ -1,4 +1,6 @@
-// soc_top Post-Synthesis 仿真 - 带断点长时间测试
+// soc_top_tb — Vivado 仿真: sw_i[6]=1, 观察 PC 轨迹
+// 用法: Vivado 中设为 Simulation Source, 与 soc_top + IP 一起仿真
+// 运行: Tcl 中 run -all (或指定时长 run 10ms)
 `timescale 1ns / 1ps
 
 module soc_top_tb();
@@ -14,104 +16,66 @@ module soc_top_tb();
         .disp_an_o(disp_an_o), .disp_seg_o(disp_seg_o), .led_o(led_o)
     );
 
-    integer test_no;
-    integer prev_an_count;
+    // ---- 100MHz 时钟 ----
+    initial clk = 0;
+    always #5 clk = ~clk;   // T=10ns, 100MHz
+
+    // ---- 仿真主体 ----
+    integer cycle;
+    reg [31:0] prev_pc;
 
     initial begin
-        clk = 0; rstn = 0; btn_i = 0; sw_i = 0;
-        test_no = 0; prev_an_count = 0;
+        // 初始化
+        rstn    = 1'b0;
+        btn_i   = 5'b0;
+        sw_i    = 16'b0;
+        cycle   = 0;
+        prev_pc = 32'hffff_ffff;
 
-        // 复位
-        #100 rstn = 1;
-        #100;
+        // sw_i[6]=1, 其余为 0
+        // → SW[7:5]=010 → Multi_8CH32 channel 2 = inst_in
+        // → SW[2]=0 → Clk_CPU = 6.25MHz (快时钟)
+        // → SW[0]=0 → 文本模式
+        sw_i[6] = 1'b1;
 
-        // 慢速模式 SW[2]=1, 等扫描启动
-        sw_i[2] = 1'b1;
+        // 复位释放
+        #200 rstn = 1'b1;
 
-        // ========================================================
-        // Test 0: 等扫描启动, 看 clkdiv[14] 翻转
-        // ========================================================
-        $display("\n[Test %0d] 初始化 + 等扫描...", test_no);
-        test_no = test_no + 1;
-        wait_ms(2);
-        report("扫描就绪");
-
-        // ========================================================
-        // Test 1-7: SW[7:5] 各通道
-        // ========================================================
-        ch_test(3'b000, "CPU输出");
-        ch_test(3'b001, "PC");
-        ch_test(3'b010, "指令");
-        ch_test(3'b011, "计数器");
-        ch_test(3'b100, "RAM地址");
-        ch_test(3'b101, "数据输出");
-        ch_test(3'b110, "数据输入");
-
-        // ========================================================
-        // Test 8: 图形模式
-        // ========================================================
-        sw_i[0]   = 1'b1;
-        sw_i[7:5] = 3'b000;
-        $display("\n[Test %0d] 图形:跑马灯", test_no); test_no = test_no + 1;
-        wait_ms(5);
-        report("跑马灯");
-
-        // ========================================================
-        // Test 9: 快时钟
-        // ========================================================
-        sw_i[2]   = 1'b0;
-        sw_i[0]   = 1'b0;
-        sw_i[7:5] = 3'b000;
-        $display("\n[Test %0d] 快时钟 6.25MHz", test_no); test_no = test_no + 1;
-        wait_ms(1);
-        report("快时钟");
-
-        $display("\n===== ALL TESTS DONE =====");
-        $finish;
+        $display("============================================");
+        $display(" soc_top simulation — testac.coe");
+        $display(" sw_i[6]=1 (SW[7:5]=010 → inst_in channel)");
+        $display(" CPU clock = 6.25MHz");
+        $display("============================================");
+        $display("");
+        $display(" Cycle | Time        | PC       | inst_in   | mem_w | Addr_out  ");
+        $display("-------|-------------|----------|-----------|-------|-----------");
     end
 
-    // ================================================================
-    // ch_test: 设置 SW[7:5] + 运行
-    // ================================================================
-    task ch_test(input [2:0] ch, input [8*8:1] name);
-        begin
-            sw_i[0]   = 1'b0;
-            sw_i[7:5] = ch;
-            $display("\n[Test %0d] SW[7:5]=%b %s", test_no, ch, name);
-            test_no = test_no + 1;
-            wait_ms(1);
-            report(name);
+    // ---- 每 CPU 周期打印 PC / 指令 ----
+    always @(posedge U_SOC.Clk_CPU) begin
+        if (rstn) begin
+            cycle = cycle + 1;
+            if (U_SOC.PC != prev_pc || U_SOC.mem_w) begin
+                $display(" %5d | %12t | 0x%06X | 0x%08X | %b     | 0x%08X",
+                         cycle, $time, U_SOC.PC, U_SOC.inst_in,
+                         U_SOC.mem_w, U_SOC.Addr_out);
+                prev_pc = U_SOC.PC;
+            end
         end
-    endtask
+    end
 
-    // ================================================================
-    // wait_ms: 等 N 毫秒 (100MHz时钟)
-    // ================================================================
-    task wait_ms(input integer n);
-        begin
-            repeat(n * 100000) @(posedge clk);
-        end
-    endtask
+    // ---- 长时间运行 / 无限循环 ----
+    // 在 Vivado Tcl 中用 run -all 或 run 10ms 控制
+    // 这里设一个很大的超时 (100ms = 100M 周期, 约 1000 万条 CPU 指令 @ 100MHz/2^4)
 
-    // ================================================================
-    // report: 打印关键信号 + $stop 断点
-    // ================================================================
-    task report(input [8*8:1] name);
-        begin
-            $display("--- %s ---", name);
-            $display("  disp_an =%b  disp_seg=%b", disp_an_o, disp_seg_o);
-            $display("  clkdiv[14]=%b  clkdiv[0]=%b  Clk_CPU=%b",
-                     U_SOC.clkdiv[14], U_SOC.clkdiv[0], U_SOC.Clk_CPU);
-            $display("  PC=0x%08X  inst_in=0x%08X", U_SOC.PC, U_SOC.inst_in);
-            $display("  Addr_out=0x%08X  Data_in=0x%08X  Data_out=0x%08X",
-                     U_SOC.Addr_out, U_SOC.Data_in, U_SOC.Data_out);
-            $display("  Disp_num=0x%08X  led_o=0x%04X", U_SOC.Disp_num, led_o);
-            $display("  >> Type 'run -continue' in Tcl <<");
-            $stop;
-        end
-    endtask
-
-    // 100MHz
-    always #5 clk = ~clk;
+    // 如果需要在仿真器看到 Disp_num (数码管显示值):
+    // 可在 Vivado wave window 中观察:
+    //   U_SOC.PC          — 完整 PC
+    //   U_SOC.inst_in     — 当前指令
+    //   U_SOC.Addr_out    — ALU 输出 / 访存地址
+    //   U_SOC.Data_out    — 写数据
+    //   U_SOC.Data_in     — 读数据
+    //   U_SOC.mem_w       — DM 写使能
+    //   U_SOC.Disp_num    — 数码管显示值 (8 位十六进制)
 
 endmodule

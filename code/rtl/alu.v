@@ -28,9 +28,9 @@ module alu(A, B, ALUOp, C, Zero,PC);
 `ALUOp_xor:C=A^B;
 `ALUOp_or:C=A|B;
 `ALUOp_and:C=A&B;
-`ALUOp_sll:C=A<<B;
-`ALUOp_srl:C=A>>B;
-`ALUOp_sra:C=A>>>B;
+`ALUOp_sll:C=A<<B[4:0];
+`ALUOp_srl:C=A>>B[4:0];
+`ALUOp_sra:C=A>>>B[4:0];
       endcase
    end // end always
    

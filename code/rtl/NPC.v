@@ -17,7 +17,7 @@ module NPC(PC, NPCOp, IMM, NPC,aluout);  // next pc module
           `NPC_PLUS4:  NPC = PCPLUS4;
           `NPC_BRANCH: NPC = PC+IMM;
           `NPC_JUMP:   NPC = PC+IMM;
-		  `NPC_JALR:	NPC =aluout;
+		    `NPC_JALR:	NPC = aluout & ~32'd1;  // RISC-V: JALR target must be word-aligned
           default:     NPC = PCPLUS4;
       endcase
    end // end always
