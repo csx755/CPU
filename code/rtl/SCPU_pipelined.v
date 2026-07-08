@@ -22,6 +22,7 @@ module SCPU_pipelined (
 
 // =================== IF 级 ===================
 wire [31:0] IF_PC, IF_pcplus4, IF_NPC;
+	reg  [31:0] WB_WD;           // writeback data (declare early, avoid implicit 1-bit wire)
 PC U_PC (
     .clk(clk), .rst(reset), .NPC(IF_NPC), .PC(IF_PC)
 );
@@ -144,6 +145,7 @@ Hazard_Unit U_Hazard (
     .ID_rs1(rs1), .ID_rs2(rs2),
     .ID_is_JAL(ID_is_JAL),
     .EX_taken(EX_taken),
+		.IF_PC(IF_PC), .ID_jal_target(ID_jal_target),
     .load_use_hazard(load_use_hazard),
     .IF_ID_flush(IF_ID_flush),
     .ID_EX_flush(ID_EX_flush),
@@ -328,7 +330,6 @@ wire [31:0] MEM_WB_pcplus4    = MEM_WB_out[31:0];
 
 // =================== WB 级 ===================
 // 写回数据多路选择
-reg [31:0] WB_WD;
 always @(*) begin
     case (MEM_WB_WDSel)
         `WDSel_FromALU: WB_WD = MEM_WB_ALU_result;
