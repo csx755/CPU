@@ -44,20 +44,21 @@ void c_interrupt_handler(void) {
     __asm__ volatile ("csrrw %0, 0x342, x0" : "=r"(mcause_val));
 
     if (mcause_val == 0x8000000B) {
-        if (CSTATUS & 0x1) {
+        // 读 counter 当前值区分: 接近 0 = 定时器到期; 否则 = 按钮
+        if (COUNTER < 10) {
             // === 定时器中断 ===
             timer_count++;
             led_state    = 0xFFFFFFFF;
             seg7_state   = timer_count & 0xFFFF;
-            display_lock = 5000;               // 倒计数保持显示
+            display_lock = 5000;
             COUNTER = 800;                     // reload (下板改 80000)
         } else {
             // === 按钮中断: LED = 按钮编号 ===
             unsigned int btn = BTN & 0x0F;
             btn_count++;
-            led_state    = btn;                // 0x00000001 ~ 0x00000004
+            led_state    = btn;
             seg7_state   = btn;
-            display_lock = 5000;               // 倒计数, 保持约 5000 次循环
+            display_lock = 5000;
         }
     }
 }
