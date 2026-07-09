@@ -124,35 +124,34 @@ wire [31:0] ram_data_in;            // dm_controller.Data_write
 wire [31:0] counter_out;            // 计数器当前值
 wire [15:0] LED_out;                // LED 状态反馈
 wire        GPIOFO, GPIOEO;         // 外设写使能 (仿真时由 assign 驱动)
-wire        counter_we_mio;
+wire        counter_we;          // 仿真=assign, 综合=MIO_BUS.edf 输出
+wire [1:0]  counter_ch;          // 仿真=assign, 综合=MIO_BUS.edf 输出
 wire        data_ram_we;            // wea_mio
 wire [31:0] Cpu_data4bus;           // — dm_controller.Data_read_from_dm
 wire        CPU2IO_mio;             // MIO_BUS stub Z → 断开
 
-// 仿真辅助: 旁路 MIO_BUS 黑盒, 直接解码 counter_we + counter_ch
-// MIO_BUS.V 是 synthesis stub, 仿真时输出全 Z, 需手动补全
-wire is_gpio_range = (Addr_out[31:28] == 4'b1111); // 0xFxxxxxxx
-wire counter_we    = is_gpio_range & (Addr_out[7:0] == 8'h08) & mem_w;
-wire [1:0] counter_ch = Addr_out[5:4];              // counter 通道选择
-assign CPU2IO = Data_out;                            // Peripheral_in = Cpu_data2bus
-wire is_mem_range = (Addr_out[31:20] == 12'h000);   // 0x00000xxx → RAM
-assign data_ram_we = is_mem_range & mem_w;           // RAM 写使能
-assign ram_data_in = Data_out;                       // RAM 写数据直通
-assign ram_addr    = Addr_out[11:2];                 // RAM 地址 (旁路 MIO_BUS stub)
-// 读数据 bypass: RAM / 外设
-wire is_periph_rd = (Addr_out[31:28] == 4'b1111);  // 0xFxxxxxxx
-assign Cpu_data4bus = is_mem_range ? douta :
-                      is_periph_rd ?
-                        ((Addr_out[7:0] == 8'h10) ? {16'b0, SW_OK} :      // SW
-                         (Addr_out[7:0] == 8'h14) ? {27'b0, BTN_OK} :     // BTN
-                         (Addr_out[7:0] == 8'h18) ? {31'b0, counter0_out} : // Timer status
-                         (Addr_out[7:0] == 8'h08) ? counter_out :          // Counter value
-                         32'b0) : 32'b0;
-
-// GPIO/显示写使能也补全 (MIO_BUS stub 输出为 Z)
-assign GPIOFO    = is_gpio_range & (Addr_out[7:0] != 8'h08) & mem_w;  // 0xF 范围除 counter 外
-assign GPIOEO    = (Addr_out[31:28] == 4'b1110) & mem_w;              // 0xExxxxxxx
-wire  GPIOFO_mio, GPIOEO_mio;       // MIO stub outputs (sim=Z), bypassed
+// MIO_BUS 仿真 bypass: MIO_BUS.V 是 synthesis stub, 仿真时输出全 Z
+// 下板综合时 MIO_BUS 使用 .edf 网表, 不需要 bypass
+`ifdef SIM
+wire is_gpio_range = (Addr_out[31:28] == 4'b1111);
+wire is_mem_range  = (Addr_out[31:20] == 12'h000);
+wire is_periph_rd  = (Addr_out[31:28] == 4'b1111);
+assign counter_we    = is_gpio_range & (Addr_out[7:0] == 8'h08) & mem_w;
+assign counter_ch    = Addr_out[5:4];
+assign CPU2IO        = Data_out;
+assign data_ram_we   = is_mem_range & mem_w;
+assign ram_data_in   = Data_out;
+assign ram_addr      = Addr_out[11:2];
+assign Cpu_data4bus  = is_mem_range ? douta :
+                       is_periph_rd ?
+                         ((Addr_out[7:0] == 8'h10) ? {16'b0, SW_OK} :
+                          (Addr_out[7:0] == 8'h14) ? {27'b0, BTN_OK} :
+                          (Addr_out[7:0] == 8'h18) ? {31'b0, counter0_out} :
+                          (Addr_out[7:0] == 8'h08) ? counter_out : 32'b0) : 32'b0;
+assign GPIOFO        = is_gpio_range & (Addr_out[7:0] != 8'h08) & mem_w;
+assign GPIOEO        = (Addr_out[31:28] == 4'b1110) & mem_w;
+`endif
+wire GPIOFO_mio, GPIOEO_mio;  // MIO stub outputs, 仿真时 Z 不驱动
 
 MIO_BUS U_MIO_BUS (
     .clk                (clk),          // — 系统时钟直连
@@ -175,7 +174,7 @@ MIO_BUS U_MIO_BUS (
     .data_ram_we        (data_ram_we),      // — wea_mio (中间信号)
     .GPIOf0000000_we    (GPIOFO_mio),       // — stub Z, 由上方 assign 覆盖
     .GPIOe0000000_we    (GPIOEO_mio),       // — stub Z, 由上方 assign 覆盖
-    .counter_we         (counter_we_mio),   // — stub Z, 由上方 assign 覆盖
+    .counter_we         (counter_we),       // 仿真=Z+assign, 综合=.edf
     .Peripheral_in      (CPU2IO_mio)        // — stub Z, 由上方 assign 覆盖
 );
 
