@@ -1,6 +1,5 @@
-// soc_top_tb — Vivado 仿真: sw_i[6]=1, 观察 PC 轨迹
-// 用法: Vivado 中设为 Simulation Source, 与 soc_top + IP 一起仿真
-// 运行: Tcl 中 run -all (或指定时长 run 10ms)
+// soc_top_tb — Vivado 仿真基础版本 (已验证可用)
+// sw_i[6]=1, 观察 PC 轨迹
 `timescale 1ns / 1ps
 
 module soc_top_tb();
@@ -18,40 +17,33 @@ module soc_top_tb();
 
     // ---- 100MHz 时钟 ----
     initial clk = 0;
-    always #5 clk = ~clk;   // T=10ns, 100MHz
+    always #5 clk = ~clk;
 
     // ---- 仿真主体 ----
     integer cycle;
     reg [31:0] prev_pc;
 
     initial begin
-        // 初始化
         rstn    = 1'b0;
         btn_i   = 5'b0;
         sw_i    = 16'b0;
         cycle   = 0;
         prev_pc = 32'hffff_ffff;
 
-        // sw_i[6]=1, 其余为 0
-        // → SW[7:5]=010 → Multi_8CH32 channel 2 = inst_in
-        // → SW[2]=0 → Clk_CPU = 6.25MHz (快时钟)
-        // → SW[0]=0 → 文本模式
         sw_i[6] = 1'b1;
 
-        // 复位释放
         #200 rstn = 1'b1;
 
         $display("============================================");
         $display(" soc_top simulation — testac.coe");
         $display(" sw_i[6]=1 (SW[7:5]=010 → inst_in channel)");
-        $display(" CPU clock = 6.25MHz");
+        $display(" CPU clock = 100MHz");
         $display("============================================");
         $display("");
         $display(" Cycle | Time        | PC       | inst_in   | mem_w | Addr_out  ");
         $display("-------|-------------|----------|-----------|-------|-----------");
     end
 
-    // ---- 每 CPU 周期打印 PC / 指令 ----
     always @(posedge U_SOC.Clk_CPU) begin
         if (rstn) begin
             cycle = cycle + 1;
@@ -64,18 +56,26 @@ module soc_top_tb();
         end
     end
 
-    // ---- 长时间运行 / 无限循环 ----
-    // 在 Vivado Tcl 中用 run -all 或 run 10ms 控制
-    // 这里设一个很大的超时 (100ms = 100M 周期, 约 1000 万条 CPU 指令 @ 100MHz/2^4)
+    // ---- 中断信号监控 ----
+    always @(posedge U_SOC.Clk_CPU) begin
+        if (rstn && U_SOC.counter0_out !== 1'b0)
+            $display(" %8d | %5d | -------- | *** counter0_out = %b, PC = 0x%06X ***",
+                     $time, cycle, U_SOC.counter0_out, U_SOC.PC);
+    end
 
-    // 如果需要在仿真器看到 Disp_num (数码管显示值):
-    // 可在 Vivado wave window 中观察:
-    //   U_SOC.PC          — 完整 PC
-    //   U_SOC.inst_in     — 当前指令
-    //   U_SOC.Addr_out    — ALU 输出 / 访存地址
-    //   U_SOC.Data_out    — 写数据
-    //   U_SOC.Data_in     — 读数据
-    //   U_SOC.mem_w       — DM 写使能
-    //   U_SOC.Disp_num    — 数码管显示值 (8 位十六进制)
+    // ---- 仿真超时 ----
+    initial begin
+        #5000000;  // 5ms
+        $display("");
+        $display("============================================");
+        $display(" Simulation timeout after 5ms");
+        $display(" CPU PC = 0x%06X, inst = 0x%08X",
+                 U_SOC.PC, U_SOC.inst_in);
+        $display(" mem_w = %b, Addr_out = 0x%08X, Data_out = 0x%08X",
+                 U_SOC.mem_w, U_SOC.Addr_out, U_SOC.Data_out);
+        $display(" counter0_out = %b", U_SOC.counter0_out);
+        $display("============================================");
+        $finish;
+    end
 
 endmodule

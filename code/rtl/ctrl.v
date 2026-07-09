@@ -37,6 +37,8 @@ module ctrl(Op, Funct7, Funct3, Zero,
     wire i_jalr = Op[6]&Op[5]&~Op[4]&~Op[3]&Op[2]&Op[1]&Op[0];
   // jal: 1101111
     wire i_jal  = Op[6]&Op[5]&~Op[4]&Op[3]&Op[2]&Op[1]&Op[0];
+  // system: 1110011 (CSR / MRET / ECALL / EBREAK)
+    wire is_system = Op[6]&Op[5]&Op[4]&~Op[3]&~Op[2]&Op[1]&Op[0];
 
   // === 具体指令译码 ===
   // R-type
@@ -92,10 +94,20 @@ module ctrl(Op, Funct7, Funct3, Zero,
     wire i_bltu = sbtype &  Funct3[2] &  Funct3[1] & ~Funct3[0]; // bltu 110
     wire i_bgeu = sbtype &  Funct3[2] &  Funct3[1] &  Funct3[0]; // bgeu 111
 
+  // CSR 指令 (funct3)
+    wire i_csrrw = is_system & ~Funct3[2] & ~Funct3[1] &  Funct3[0]; // 001
+    wire i_csrrs = is_system & ~Funct3[2] &  Funct3[1] & ~Funct3[0]; // 010
+    wire i_csrrc = is_system & ~Funct3[2] &  Funct3[1] &  Funct3[0]; // 011
+    // ECALL: funct3=000, funct12=0, rd=0, rs1=0 (机器码 0x00000073)
+    wire i_ecall = is_system & ~Funct3[2] & ~Funct3[1] & ~Funct3[0] &
+                   ~Funct7[6] & ~Funct7[5] & ~Funct7[4] & ~Funct7[3] &
+                   ~Funct7[2] & ~Funct7[1] & ~Funct7[0];
+    wire i_csr   = i_csrrw | i_csrrs | i_csrrc;                       // any CSR
+
   // === 控制信号生成 ===
 
   // RegWrite: 需要写寄存器的指令
-  assign RegWrite = rtype | itype_r | itype_l | i_jalr | i_jal | i_lui | i_auipc;
+  assign RegWrite = rtype | itype_r | itype_l | i_jalr | i_jal | i_lui | i_auipc | i_csr;
 
   // MemWrite: 需要写数据存储器的指令（S-type）
   assign MemWrite = stype;
@@ -113,9 +125,9 @@ module ctrl(Op, Funct7, Funct3, Zero,
   assign EXTOp[0] = i_jal;                                          // J-type
 
   // WDSel[1:0] — 写回数据选择
-  // 00=FromALU, 01=FromMEM, 10=FromPC
-  assign WDSel[0] = itype_l;                    // Load 指令从 MEM 写回
-  assign WDSel[1] = i_jal | i_jalr;              // JAL/JALR 从 PC+4 写回
+  // 00=FromALU, 01=FromMEM, 10=FromPC, 11=FromCSR
+  assign WDSel[0] = itype_l | i_csr;              // Load 从 MEM, CSR 从 CSR
+  assign WDSel[1] = i_jal | i_jalr | i_csr;        // JAL/JALR 从 PC+4, CSR 从 CSR
 
   // NPCOp[2:0] — 下一 PC 选择
   // 000=PLUS4, 001=BRANCH, 010=JUMP, 100=JALR

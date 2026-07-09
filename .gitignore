@@ -19,3 +19,15 @@ results.txt
 cpu_test
 *.vcd
 *.wdb
+*.pb
+
+# iVerilog 临时文件 (以下划线开头)
+code/sim/_*
+
+# Vivado MCP
+vivado_mcp/
+.mcp.json
+full_env/
+
+# ctags
+ctags*.zip

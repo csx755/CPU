@@ -52,3 +52,12 @@
 `define dm_byte 3'b011
 `define dm_byte_unsigned 3'b100
 
+// WDSel 扩展
+`define WDSel_FromCSR 2'b11
+
+// CSR 地址
+`define CSR_mstatus  12'h300
+`define CSR_mtvec    12'h305
+`define CSR_mepc     12'h341
+`define CSR_mcause   12'h342
+

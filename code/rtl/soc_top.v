@@ -70,7 +70,9 @@ wire        mem_w;
 wire [2:0]  dm_ctrl;
 wire        CPU_MIO, MIO_ready;
 wire [31:0] reg_data_debug;     // 寄存器调试输出 (流水线暂不使用)
-
+// VRFC 前向声明 (用于端口连接后声明的信号)
+wire [9:0]  ram_addr;
+wire        counter0_out, counter1_out, counter2_out;
 // [MIO 握手] 自环: CPU 发起访存即视为总线就绪
 assign MIO_ready = CPU_MIO;
 
@@ -80,7 +82,7 @@ SCPU_pipelined U_SCPU (
     .MIO_ready  (MIO_ready),
     .inst_in    (inst_in),
     .Data_in    (Data_in),
-    .INT        (counter0_out),     // 计数器0溢出 → CPU 中断
+    .INT        (soc_int),          // 组合中断: 定时器 + 按钮
     .mem_w      (mem_w),
     .PC_out     (PC),
     .Addr_out   (Addr_out),
@@ -114,21 +116,38 @@ RAM_B U_RAM_B (
 );
 
 // =============================================================================
-// MIO_BUS �? 存储器映�? IO 总线 (老师 .edf 黑盒)
+// MIO_BUS — 存储器映射 IO 总线 (老师 .edf 黑盒, 仿真时用辅助逻辑补全)
 // =============================================================================
-wire [31:0] CPU2IO;                 // Peripheral_in �? 外设数据
+wire [31:0] CPU2IO;                 // Peripheral_in — 外设数据 (仿真时由 assign 驱动)
 wire [31:0] ram_data_in;            // dm_controller.Data_write
-wire [9:0]  ram_addr;               // RAM_B.addra
-wire [31:0] counter_out;            // 计数器当前�??
-wire        counter0_out, counter1_out, counter2_out;
-wire [15:0] LED_out;                // LED 状�?�反�?
-wire        GPIOFO, GPIOEO;         // 外设写使�?
-wire        counter_we;
+wire [31:0] counter_out;            // 计数器当前值
+wire [15:0] LED_out;                // LED 状态反馈
+wire        GPIOFO, GPIOEO;         // 外设写使能 (仿真时由 assign 驱动)
+wire        counter_we_mio;
 wire        data_ram_we;            // wea_mio
-wire [31:0] Cpu_data4bus;           // �? dm_controller.Data_read_from_dm
+wire [31:0] Cpu_data4bus;           // — dm_controller.Data_read_from_dm
+wire        CPU2IO_mio;             // MIO_BUS stub Z → 断开
+
+// 仿真辅助: 旁路 MIO_BUS 黑盒, 直接解码 counter_we + counter_ch
+// MIO_BUS.V 是 synthesis stub, 仿真时输出全 Z, 需手动补全
+wire is_gpio_range = (Addr_out[31:28] == 4'b1111); // 0xFxxxxxxx
+wire counter_we    = is_gpio_range & (Addr_out[7:0] == 8'h08) & mem_w;
+wire [1:0] counter_ch = Addr_out[5:4];              // counter 通道选择
+assign CPU2IO = Data_out;                            // Peripheral_in = Cpu_data2bus
+wire is_mem_range = (Addr_out[31:20] == 12'h000);   // 0x00000xxx → RAM
+assign data_ram_we = is_mem_range & mem_w;           // RAM 写使能
+assign ram_data_in = Data_out;                       // RAM 写数据直通
+
+// GPIO/显示写使能也补全 (MIO_BUS stub 输出为 Z)
+assign GPIOFO    = is_gpio_range & (Addr_out[7:0] != 8'h08) & mem_w;  // 0xF 范围除 counter 外
+assign GPIOEO    = (Addr_out[31:28] == 4'b1110) & mem_w;              // 0xExxxxxxx
+wire  GPIOFO_mio, GPIOEO_mio;       // MIO stub outputs (sim=Z), bypassed
+
+// 组合中断: 定时器 + 按钮
+wire soc_int = counter0_out | (|BTN_OK);      // counter0 OR any button (组合中断)
 
 MIO_BUS U_MIO_BUS (
-    .clk                (clk),          // �? 系统时钟直连
+    .clk                (clk),          // — 系统时钟直连
     .rst                (rst),
     .BTN                (BTN_OK),
     .SW                 (SW_OK),
@@ -145,11 +164,11 @@ MIO_BUS U_MIO_BUS (
     .Cpu_data4bus       (Cpu_data4bus),
     .ram_data_in        (ram_data_in),
     .ram_addr           (ram_addr),
-    .data_ram_we        (data_ram_we),      // �? wea_mio (中间信号)
-    .GPIOf0000000_we    (GPIOFO),           // �? SPIO.EN
-    .GPIOe0000000_we    (GPIOEO),           // �? Multi_8CH32.EN
-    .counter_we         (counter_we),
-    .Peripheral_in      (CPU2IO)
+    .data_ram_we        (data_ram_we),      // — wea_mio (中间信号)
+    .GPIOf0000000_we    (GPIOFO_mio),       // — stub Z, 由上方 assign 覆盖
+    .GPIOe0000000_we    (GPIOEO_mio),       // — stub Z, 由上方 assign 覆盖
+    .counter_we         (counter_we_mio),   // — stub Z, 由上方 assign 覆盖
+    .Peripheral_in      (CPU2IO_mio)        // — stub Z, 由上方 assign 覆盖
 );
 
 // =============================================================================
@@ -174,7 +193,6 @@ assign dina = Data_write_to_dm;
 // =============================================================================
 // Counter_x �? 3 通道计数�?
 // =============================================================================
-wire [1:0]  counter_ch;
 wire        counter0_OUT, counter1_OUT, counter2_OUT;
 
 Counter_x U_Counter_x (

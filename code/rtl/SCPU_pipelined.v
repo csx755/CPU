@@ -1,15 +1,15 @@
 `include "ctrl_encode_def.v"
 
-// SCPU_pipelined — 5 级流水线 RISC-V CPU 顶层
+// SCPU_pipelined — 5 级流水线 RISC-V CPU 顶层 (含中断 + CSR)
 //   IF → ID → EX → MEM → WB
-//   对外接口与单周期 SCPU.v 完全一致, 可直接替换到 sccomp/soc_top 中
+//   对外接口与单周期 SCPU.v 完全一致
 module SCPU_pipelined (
     input           clk,
     input           reset,          // 高有效复位
     input           MIO_ready,      // [SoC] 暂不使用 (保留兼容)
     input  [31:0]   inst_in,        // 取指 (来自 ROM)
     input  [31:0]   Data_in,        // Load 数据 (来自外部 DM/MIO_BUS)
-    input           INT,            // 中断 (暂不使用)
+    input           INT,            // 中断 (来自 Counter_x)
     output          mem_w,          // DM 写使能 (MEM 级)
     output          CPU_MIO,        // [SoC] 访存标志 (保留兼容)
     output [31:0]   PC_out,         // 当前 PC (IF 级)
@@ -22,7 +22,28 @@ module SCPU_pipelined (
 
 // =================== IF 级 ===================
 wire [31:0] IF_PC, IF_pcplus4, IF_NPC;
-	reg  [31:0] WB_WD;           // writeback data (declare early, avoid implicit 1-bit wire)
+reg  [31:0] WB_WD;                  // writeback data
+
+// === VRFC 前向声明 ===
+// pipeline_stall/kill_IF/kill_ID/IF_ID_freeze 在模块顶部声明
+// 避免 IF/ID 流水线寄存器 VRFC 隐式声明警告
+wire pipeline_stall, kill_IF, kill_ID, IF_ID_freeze;
+wire        MEM_WB_RegWrite;
+wire [4:0]  MEM_WB_rd;
+wire        ID_EX_MemRead;
+wire [4:0]  ID_EX_rd;
+wire        EX_taken;
+wire        EX_MEM_RegWrite;
+wire [4:0]  EX_MEM_rd;
+wire [31:0] EX_MEM_ALU_result;
+wire [11:0] ID_EX_csr_addr;
+wire [31:0] ID_EX_csr_wdata;
+wire [11:0] EX_MEM_csr_addr;
+wire [31:0] EX_MEM_csr_wdata;
+wire [11:0] MEM_WB_csr_addr;
+wire [31:0] MEM_WB_csr_wdata;
+wire [31:0] EX_ALU_result;
+
 PC U_PC (
     .clk(clk), .rst(reset), .NPC(IF_NPC), .PC(IF_PC)
 );
@@ -34,7 +55,7 @@ wire [63:0] IF_ID_in  = {inst_in, IF_pcplus4};
 wire [63:0] IF_ID_out;
 GRE_array #(.WIDTH(64)) IF_ID (
     .Clk(clk), .Rst(reset),
-    .write_enable(IF_ID_write), .flush(IF_ID_flush),
+    .write_enable(~IF_ID_freeze), .flush(kill_IF),
     .in(IF_ID_in), .out(IF_ID_out)
 );
 wire [31:0] ID_instruction = IF_ID_out[63:32];
@@ -48,6 +69,7 @@ wire [4:0]  rd     = ID_instruction[11:7];
 wire [6:0]  Op     = ID_instruction[6:0];
 wire [2:0]  Funct3 = ID_instruction[14:12];
 wire [6:0]  Funct7 = ID_instruction[31:25];
+wire [11:0] csr_addr = ID_instruction[31:20];  // CSR 地址
 
 // 立即数 — 字段提取
 wire [4:0]  ID_iimm_shamt = ID_instruction[24:20];
@@ -89,6 +111,8 @@ EXT U_EXT (
 wire ID_is_JAL    = (Op == 7'b1101111);
 wire ID_is_JALR   = (Op == 7'b1100111);
 wire ID_is_branch = (Op == 7'b1100011);
+wire ID_is_MRET   = (ID_instruction == 32'h30200073);
+wire ID_is_ECALL  = (ID_instruction == 32'h00000073);   // ECALL 特权中断
 
 // 分支类型编码 (3-bit):
 //   000=非分支  001=BEQ  010=BNE   011=BLT
@@ -119,6 +143,59 @@ wire [31:0] ID_branch_target = ID_PC + ID_imm32;
 // 是否 Load (WDSel[0]=FromMEM)
 wire ID_MemRead = ID_WDSel[0];
 
+// === CSR 指令标志 ===
+wire ID_is_CSRRW = (Op == 7'b1110011) && (Funct3 == 3'b001);       // CSRRW
+wire ID_is_CSRRS = (Op == 7'b1110011) && (Funct3 == 3'b010);       // CSRRS
+wire ID_is_CSRRC = (Op == 7'b1110011) && (Funct3 == 3'b011);       // CSRRC
+wire ID_is_CSR_write = ID_is_CSRRW | ID_is_CSRRS | ID_is_CSRRC;
+wire ID_csr_do_write = (rs1 != 5'd0);  // CSRRW/CSRRS/CSRRC with rs1=x0 → read-only
+wire [1:0] ID_csr_funct3 = ID_is_CSRRW ? 2'b01 :
+                            ID_is_CSRRS ? 2'b10 :
+                            ID_is_CSRRC ? 2'b11 : 2'b00;
+
+// === CSR 寄存器 (posedge clk) ===
+reg [31:0] mstatus, mtvec, mepc, mcause;
+reg        cpu_in_interrupt;
+
+// CSR 读 (组合逻辑, ID 级使用)
+wire [31:0] CSR_read_val;
+assign CSR_read_val =
+    (csr_addr == `CSR_mstatus) ? mstatus :
+    (csr_addr == `CSR_mtvec)   ? mtvec   :
+    (csr_addr == `CSR_mepc)    ? mepc    :
+    (csr_addr == `CSR_mcause)  ? mcause  :
+                                 32'b0;
+
+// === 中断检测 ===
+// 前向声明移至模块顶部
+wire interrupt_accept;
+assign interrupt_accept = INT && mstatus[3]       // INT=1, MIE=1
+                          && !pipeline_stall       // 无阻塞
+                          && !EX_taken             // 无 EX redirect
+                          && !ID_is_JAL            // 无 JAL redirect
+                          && !ID_is_MRET           // 不是 MRET
+                          && !ID_is_ECALL          // 不是 ECALL (异常优先于中断)
+                          && !cpu_in_interrupt;     // 不在中断处理中
+
+// === CSR RAW hazard (连续 CSR 指令) ===
+// 检查 ID/EX, EX/MEM, MEM/WB — 直到 CSR 写真正生效 (posedge 之后)
+wire csr_raw_hazard;
+assign csr_raw_hazard = ID_is_CSR_write && (
+    (ID_EX_is_CSR_write  && (ID_EX_csr_addr == csr_addr)) ||
+    (EX_MEM_is_CSR_write && (EX_MEM_csr_addr == csr_addr)) ||
+    (MEM_WB_is_CSR_write && (MEM_WB_csr_addr == csr_addr))
+);
+
+// === mepc 前递 (MRET 读流水线中的最新 mepc 值, 不需要 stall) ===
+wire [31:0] mepc_fwd;
+assign mepc_fwd =
+    (ID_EX_is_CSR_write  && ID_EX_csr_do_write && (ID_EX_csr_addr == `CSR_mepc)) ? ID_EX_csr_wdata :
+    (EX_MEM_is_CSR_write && EX_MEM_csr_do_write && (EX_MEM_csr_addr == `CSR_mepc)) ? EX_MEM_csr_wdata :
+    (MEM_WB_is_CSR_write && MEM_WB_csr_do_write && (MEM_WB_csr_addr == `CSR_mepc)) ? MEM_WB_csr_wdata :
+    mepc;
+
+
+
 // 寄存器堆 — 读在 ID 级, 写在 WB 级
 wire [31:0] RD1, RD2;
 RF U_RF (
@@ -130,81 +207,99 @@ RF U_RF (
     .reg_sel(reg_sel), .reg_data(reg_data)
 );
 
-// WB→ID 前递: MEM_WB 正在写且 ID 级正在读同一寄存器时, 直接用 WB_WD
-// (解决 RF 的 NBA 写与组合读在同一 posedge 的竞态)
+// WB→ID 前递
 wire WB_fwd_rs1 = MEM_WB_RegWrite && (MEM_WB_rd != 5'd0) && (MEM_WB_rd == rs1);
 wire WB_fwd_rs2 = MEM_WB_RegWrite && (MEM_WB_rd != 5'd0) && (MEM_WB_rd == rs2);
 wire [31:0] ID_RD1 = WB_fwd_rs1 ? WB_WD : RD1;
 wire [31:0] ID_RD2 = WB_fwd_rs2 ? WB_WD : RD2;
 
 // =================== 冒险检测 ===================
-wire load_use_hazard, IF_ID_flush, ID_EX_flush, IF_ID_write;
 Hazard_Unit U_Hazard (
     .ID_EX_MemRead(ID_EX_MemRead),
     .ID_EX_rd(ID_EX_rd),
     .ID_rs1(rs1), .ID_rs2(rs2),
     .ID_is_JAL(ID_is_JAL),
     .EX_taken(EX_taken),
-		.IF_PC(IF_PC), .ID_jal_target(ID_jal_target),
-    .load_use_hazard(load_use_hazard),
-    .IF_ID_flush(IF_ID_flush),
-    .ID_EX_flush(ID_EX_flush),
-    .IF_ID_write(IF_ID_write)
+    .interrupt_accept(interrupt_accept),
+    .ID_is_MRET(ID_is_MRET),
+    .ID_is_ECALL(ID_is_ECALL),
+    .csr_raw_hazard(csr_raw_hazard),
+    .pipeline_stall(pipeline_stall),
+    .kill_IF(kill_IF),
+    .kill_ID(kill_ID),
+    .IF_ID_freeze(IF_ID_freeze)
 );
 
-// =================== ID/EX 寄存器 (224-bit) ===================
-// Packing: [223]=RegWrite [222]=MemWrite [221]=ALUSrc
-//   [220:219]=WDSel [218:216]=DMType [215]=MemRead
-//   [214:212]=branch_type [211:207]=ALUOp
-//   [206:175]=RD1 [174:143]=RD2 [142:111]=imm32
-//   [110:79]=PC [78:47]=pcplus4 [46:15]=branch_target
-//   [14:10]=rs1 [9:5]=rs2 [4:0]=rd
-localparam ID_EX_W = 224;
+// =================== ID/EX 寄存器 (304-bit) ===================
+// 原有 224-bit + CSR 80-bit (is_csr + do_write + funct3 + addr + wdata + old)
+localparam ID_EX_W = 304;
 wire [ID_EX_W-1:0] ID_EX_in;
 wire [ID_EX_W-1:0] ID_EX_out;
 
 GRE_array #(.WIDTH(ID_EX_W)) ID_EX (
     .Clk(clk), .Rst(reset),
-    .write_enable(1'b1), .flush(ID_EX_flush),
+    .write_enable(1'b1), .flush(kill_ID),
     .in(ID_EX_in), .out(ID_EX_out)
 );
 
+// csr_wdata = rs1 value (完整前递: EX 组合 → EX/MEM → WB)
+// 类似 alu_A 的三级前递, 但增加了 EX 级组合前递 (因消费者在 ID 而非 EX)
+wire ex_fwd_csr1 = ID_EX_RegWrite && (ID_EX_rd != 5'd0) && (ID_EX_rd == rs1);
+wire ex_fwd_csr2 = EX_MEM_RegWrite && (EX_MEM_rd != 5'd0) && (EX_MEM_rd == rs1);
+wire [31:0] ID_csr_wdata = ex_fwd_csr2 ? EX_MEM_ALU_result :
+                            ex_fwd_csr1 ? EX_ALU_result :
+                                          ID_RD1;  // 含 WB→ID 前递
+
 assign ID_EX_in = {
-    ID_RegWrite, ID_MemWrite, ID_ALUSrc,          //  3 bits [223:221]
-    ID_WDSel,                                      //  2 bits [220:219]
-    ID_DMType,                                     //  3 bits [218:216]
-    ID_MemRead,                                    //  1 bit  [215]
-    ID_branch_type,                                //  3 bits [214:212]
-    ID_ALUOp,                                      //  5 bits [211:207]
-    ID_RD1,                                        // 32 bits [206:175]  (WB→ID 前递后)
-    ID_RD2,                                        // 32 bits [174:143]  (WB→ID 前递后)
-    ID_imm32,                                      // 32 bits [142:111]
-    ID_PC,                                         // 32 bits [110:79]
-    ID_pcplus4,                                    // 32 bits [78:47]
-    ID_branch_target,                              // 32 bits [46:15]
-    rs1,                                           //  5 bits [14:10]
-    rs2,                                           //  5 bits [9:5]
-    rd                                             //  5 bits [4:0]
+    ID_RegWrite, ID_MemWrite, ID_ALUSrc,          //  3 bits [303:301]
+    ID_WDSel,                                      //  2 bits [300:299]
+    ID_DMType,                                     //  3 bits [298:296]
+    ID_MemRead,                                    //  1 bit  [295]
+    ID_branch_type,                                //  3 bits [294:292]
+    ID_ALUOp,                                      //  5 bits [291:287]
+    ID_RD1,                                        // 32 bits [286:255]
+    ID_RD2,                                        // 32 bits [254:223]
+    ID_imm32,                                      // 32 bits [222:191]
+    ID_PC,                                         // 32 bits [190:159]
+    ID_pcplus4,                                    // 32 bits [158:127]
+    ID_branch_target,                              // 32 bits [126:95]
+    rs1,                                           //  5 bits [94:90]
+    rs2,                                           //  5 bits [89:85]
+    rd,                                            //  5 bits [84:80]
+    // === CSR 扩展 ===
+    ID_is_CSR_write,                               //  1 bit  [79]
+    ID_csr_do_write,                               //  1 bit  [78]
+    ID_csr_funct3,                                 //  2 bits [77:76]
+    csr_addr,                                      // 12 bits [75:64]
+    ID_csr_wdata,                                  // 32 bits [63:32]
+    CSR_read_val                                   // 32 bits [31:0]
 };
 
 // 解包 ID/EX
-wire        ID_EX_RegWrite      = ID_EX_out[223];
-wire        ID_EX_MemWrite      = ID_EX_out[222];
-wire        ID_EX_ALUSrc        = ID_EX_out[221];
-wire [1:0]  ID_EX_WDSel         = ID_EX_out[220:219];
-wire [2:0]  ID_EX_DMType        = ID_EX_out[218:216];
-wire        ID_EX_MemRead       = ID_EX_out[215];
-wire [2:0]  ID_EX_branch_type   = ID_EX_out[214:212];
-wire [4:0]  ID_EX_ALUOp         = ID_EX_out[211:207];
-wire [31:0] ID_EX_RD1           = ID_EX_out[206:175];
-wire [31:0] ID_EX_RD2           = ID_EX_out[174:143];
-wire [31:0] ID_EX_imm32         = ID_EX_out[142:111];
-wire [31:0] ID_EX_PC            = ID_EX_out[110:79];
-wire [31:0] ID_EX_pcplus4       = ID_EX_out[78:47];
-wire [31:0] ID_EX_branch_target = ID_EX_out[46:15];
-wire [4:0]  ID_EX_rs1           = ID_EX_out[14:10];
-wire [4:0]  ID_EX_rs2           = ID_EX_out[9:5];
-wire [4:0]  ID_EX_rd            = ID_EX_out[4:0];
+assign        ID_EX_RegWrite      = ID_EX_out[303];
+assign        ID_EX_MemWrite      = ID_EX_out[302];
+assign        ID_EX_ALUSrc        = ID_EX_out[301];
+wire [1:0]  ID_EX_WDSel         = ID_EX_out[300:299];
+wire [2:0]  ID_EX_DMType        = ID_EX_out[298:296];
+assign        ID_EX_MemRead       = ID_EX_out[295];
+wire [2:0]  ID_EX_branch_type   = ID_EX_out[294:292];
+wire [4:0]  ID_EX_ALUOp         = ID_EX_out[291:287];
+wire [31:0] ID_EX_RD1           = ID_EX_out[286:255];
+wire [31:0] ID_EX_RD2           = ID_EX_out[254:223];
+wire [31:0] ID_EX_imm32         = ID_EX_out[222:191];
+wire [31:0] ID_EX_PC            = ID_EX_out[190:159];
+wire [31:0] ID_EX_pcplus4       = ID_EX_out[158:127];
+wire [31:0] ID_EX_branch_target = ID_EX_out[126:95];
+wire [4:0]  ID_EX_rs1           = ID_EX_out[94:90];
+wire [4:0]  ID_EX_rs2           = ID_EX_out[89:85];
+assign      ID_EX_rd            = ID_EX_out[84:80];
+// CSR
+assign        ID_EX_is_CSR_write  = ID_EX_out[79];
+assign        ID_EX_csr_do_write  = ID_EX_out[78];
+wire [1:0]  ID_EX_csr_funct3    = ID_EX_out[77:76];
+assign      ID_EX_csr_addr      = ID_EX_out[75:64];
+assign      ID_EX_csr_wdata     = ID_EX_out[63:32];
+wire [31:0] ID_EX_old_csr_val   = ID_EX_out[31:0];
 
 // =================== EX 级 ===================
 // 前递多路选择
@@ -221,23 +316,21 @@ Forwarding_Unit U_Forward (
 // ALU 操作数 (含前递)
 wire [31:0] alu_A = (ForwardA == 2'b01) ? EX_MEM_ALU_result :
                     (ForwardA == 2'b10) ? WB_WD : ID_EX_RD1;
-// ALU B: 当 ALUSrc=1 (store/load/I-type) 时用立即数, 否则用寄存器值 (含前递)
 wire [31:0] alu_B = ID_EX_ALUSrc ? ID_EX_imm32 :
                     (ForwardB == 2'b01) ? EX_MEM_ALU_result :
                     (ForwardB == 2'b10) ? WB_WD : ID_EX_RD2;
-// Store 数据: 始终是 rs2 的值 (含前递), 独立于 ALU B
+// Store 数据
 wire [31:0] store_data = (ForwardB == 2'b01) ? EX_MEM_ALU_result :
                          (ForwardB == 2'b10) ? WB_WD : ID_EX_RD2;
 
 // ALU (alu.v 完全复用)
-wire [31:0] EX_ALU_result;
 wire        EX_Zero;
 alu U_ALU (
     .A(alu_A), .B(alu_B), .ALUOp(ID_EX_ALUOp),
     .C(EX_ALU_result), .Zero(EX_Zero), .PC(ID_EX_PC)
 );
 
-// 分支条件决议 (直接比较, 不依赖 ALU Zero)
+// 分支条件决议
 reg  branch_taken_reg;
 always @(*) begin
     case (ID_EX_branch_type)
@@ -255,18 +348,16 @@ wire branch_taken_cond = branch_taken_reg;
 
 wire EX_is_branch = (ID_EX_branch_type >= 3'b001) && (ID_EX_branch_type <= 3'b110);
 wire EX_is_JALR   = (ID_EX_branch_type == 3'b111);
-wire EX_taken     = EX_is_JALR | (EX_is_branch && branch_taken_cond);
+assign EX_taken     = EX_is_JALR | (EX_is_branch && branch_taken_cond);
 
-// 跳转目标 (JALR 用 ALU 结果并清除 LSB)
+// 跳转目标
 wire [31:0] EX_branch_target = EX_is_JALR
     ? ((alu_A + ID_EX_imm32) & ~32'd1)
     : ID_EX_branch_target;
 
-// =================== EX/MEM 寄存器 (108-bit) ===================
-// Packing: [107]=RegWrite [106]=MemWrite [105:104]=WDSel
-//   [103:101]=DMType [100:69]=ALU_result [68:37]=RD2
-//   [36:32]=rd [31:0]=pcplus4
-localparam EX_MEM_W = 108;
+// =================== EX/MEM 寄存器 (188-bit) ===================
+// 原有 108-bit + CSR 80-bit
+localparam EX_MEM_W = 188;
 wire [EX_MEM_W-1:0] EX_MEM_in;
 wire [EX_MEM_W-1:0] EX_MEM_out;
 
@@ -277,32 +368,44 @@ GRE_array #(.WIDTH(EX_MEM_W)) EX_MEM (
 );
 
 assign EX_MEM_in = {
-    ID_EX_RegWrite, ID_EX_MemWrite,                //  2 bits [107:106]
-    ID_EX_WDSel,                                    //  2 bits [105:104]
-    ID_EX_DMType,                                   //  3 bits [103:101]
-    EX_ALU_result,                                  // 32 bits [100:69]
-    store_data,                                     // 32 bits [68:37]  (Store 数据 = RD2 前递)
-    ID_EX_rd,                                       //  5 bits [36:32]
-    ID_EX_pcplus4                                   // 32 bits [31:0]
+    ID_EX_RegWrite, ID_EX_MemWrite,                //  2 bits [187:186]
+    ID_EX_WDSel,                                    //  2 bits [185:184]
+    ID_EX_DMType,                                   //  3 bits [183:181]
+    EX_ALU_result,                                  // 32 bits [180:149]
+    store_data,                                     // 32 bits [148:117]
+    ID_EX_rd,                                       //  5 bits [116:112]
+    ID_EX_pcplus4,                                  // 32 bits [111:80]
+    // === CSR 透传 ===
+    ID_EX_is_CSR_write,                             //  1 bit  [79]
+    ID_EX_csr_do_write,                             //  1 bit  [78]
+    ID_EX_csr_funct3,                               //  2 bits [77:76]
+    ID_EX_csr_addr,                                 // 12 bits [75:64]
+    ID_EX_csr_wdata,                                // 32 bits [63:32]
+    ID_EX_old_csr_val                               // 32 bits [31:0]
 };
 
-wire        EX_MEM_RegWrite   = EX_MEM_out[107];
-wire        EX_MEM_MemWrite   = EX_MEM_out[106];
-wire [1:0]  EX_MEM_WDSel      = EX_MEM_out[105:104];
-wire [2:0]  EX_MEM_DMType     = EX_MEM_out[103:101];
-wire [31:0] EX_MEM_ALU_result = EX_MEM_out[100:69];
-wire [31:0] EX_MEM_RD2        = EX_MEM_out[68:37];
-wire [4:0]  EX_MEM_rd         = EX_MEM_out[36:32];
-wire [31:0] EX_MEM_pcplus4    = EX_MEM_out[31:0];
+assign        EX_MEM_RegWrite   = EX_MEM_out[187];
+assign        EX_MEM_MemWrite   = EX_MEM_out[186];
+wire [1:0]  EX_MEM_WDSel      = EX_MEM_out[185:184];
+wire [2:0]  EX_MEM_DMType     = EX_MEM_out[183:181];
+assign      EX_MEM_ALU_result = EX_MEM_out[180:149];
+wire [31:0] EX_MEM_RD2        = EX_MEM_out[148:117];
+assign      EX_MEM_rd         = EX_MEM_out[116:112];
+wire [31:0] EX_MEM_pcplus4    = EX_MEM_out[111:80];
+// CSR
+assign        EX_MEM_is_CSR_write = EX_MEM_out[79];
+assign        EX_MEM_csr_do_write = EX_MEM_out[78];
+wire [1:0]  EX_MEM_csr_funct3   = EX_MEM_out[77:76];
+assign      EX_MEM_csr_addr    = EX_MEM_out[75:64];
+assign      EX_MEM_csr_wdata   = EX_MEM_out[63:32];
+wire [31:0] EX_MEM_old_csr_val = EX_MEM_out[31:0];
 
 // =================== MEM 级 ===================
 // DM 在 SCPU 外部, 通过 Addr_out/Data_out/mem_w/dm_ctrl 输出
-// Data_in 来自外部 DM, 锁存到 MEM/WB
 
-// =================== MEM/WB 寄存器 (104-bit) ===================
-// Packing: [103]=RegWrite [102:101]=WDSel [100:69]=Data_in
-//   [68:37]=ALU_result [36:32]=rd [31:0]=pcplus4
-localparam MEM_WB_W = 104;
+// =================== MEM/WB 寄存器 (184-bit) ===================
+// 原有 104-bit + CSR 80-bit
+localparam MEM_WB_W = 184;
 wire [MEM_WB_W-1:0] MEM_WB_in;
 wire [MEM_WB_W-1:0] MEM_WB_out;
 
@@ -313,20 +416,34 @@ GRE_array #(.WIDTH(MEM_WB_W)) MEM_WB (
 );
 
 assign MEM_WB_in = {
-    EX_MEM_RegWrite,                                //  1 bit  [103]
-    EX_MEM_WDSel,                                   //  2 bits [102:101]
-    Data_in,                                        // 32 bits [100:69]
-    EX_MEM_ALU_result,                              // 32 bits [68:37]
-    EX_MEM_rd,                                      //  5 bits [36:32]
-    EX_MEM_pcplus4                                  // 32 bits [31:0]
+    EX_MEM_RegWrite,                                //  1 bit  [183]
+    EX_MEM_WDSel,                                   //  2 bits [182:181]
+    Data_in,                                        // 32 bits [180:149]
+    EX_MEM_ALU_result,                              // 32 bits [148:117]
+    EX_MEM_rd,                                      //  5 bits [116:112]
+    EX_MEM_pcplus4,                                 // 32 bits [111:80]
+    // === CSR 透传 ===
+    EX_MEM_is_CSR_write,                            //  1 bit  [79]
+    EX_MEM_csr_do_write,                            //  1 bit  [78]
+    EX_MEM_csr_funct3,                              //  2 bits [77:76]
+    EX_MEM_csr_addr,                                // 12 bits [75:64]
+    EX_MEM_csr_wdata,                               // 32 bits [63:32]
+    EX_MEM_old_csr_val                              // 32 bits [31:0]
 };
 
-wire        MEM_WB_RegWrite   = MEM_WB_out[103];
-wire [1:0]  MEM_WB_WDSel      = MEM_WB_out[102:101];
-wire [31:0] MEM_WB_Data_in    = MEM_WB_out[100:69];
-wire [31:0] MEM_WB_ALU_result = MEM_WB_out[68:37];
-wire [4:0]  MEM_WB_rd         = MEM_WB_out[36:32];
-wire [31:0] MEM_WB_pcplus4    = MEM_WB_out[31:0];
+assign        MEM_WB_RegWrite   = MEM_WB_out[183];
+wire [1:0]  MEM_WB_WDSel      = MEM_WB_out[182:181];
+wire [31:0] MEM_WB_Data_in    = MEM_WB_out[180:149];
+wire [31:0] MEM_WB_ALU_result = MEM_WB_out[148:117];
+assign      MEM_WB_rd         = MEM_WB_out[116:112];
+wire [31:0] MEM_WB_pcplus4    = MEM_WB_out[111:80];
+// CSR
+assign        MEM_WB_is_CSR_write = MEM_WB_out[79];
+assign        MEM_WB_csr_do_write = MEM_WB_out[78];
+wire [1:0]  MEM_WB_csr_funct3   = MEM_WB_out[77:76];
+assign      MEM_WB_csr_addr    = MEM_WB_out[75:64];
+assign      MEM_WB_csr_wdata   = MEM_WB_out[63:32];
+wire [31:0] MEM_WB_old_csr_val = MEM_WB_out[31:0];
 
 // =================== WB 级 ===================
 // 写回数据多路选择
@@ -335,16 +452,79 @@ always @(*) begin
         `WDSel_FromALU: WB_WD = MEM_WB_ALU_result;
         `WDSel_FromMEM: WB_WD = MEM_WB_Data_in;
         `WDSel_FromPC:  WB_WD = MEM_WB_pcplus4;
+        `WDSel_FromCSR: WB_WD = MEM_WB_old_csr_val;
         default:        WB_WD = 32'b0;
     endcase
 end
 
+// === CSR 写 (posedge clk, 硬件优先级 > 软件) ===
+wire [31:0] mtvec_base;
+assign mtvec_base = mtvec & ~32'h3;  // 清最低2位(Direct模式)
+
+// CSR 读-改-写: WB 级 combinational 重读 + funct3 译码
+wire [31:0] WB_csr_cur =
+    (MEM_WB_csr_addr == `CSR_mstatus) ? mstatus :
+    (MEM_WB_csr_addr == `CSR_mtvec)   ? mtvec   :
+    (MEM_WB_csr_addr == `CSR_mepc)    ? mepc    :
+    (MEM_WB_csr_addr == `CSR_mcause)  ? mcause  : 32'b0;
+wire [31:0] WB_csr_write_val =
+    (MEM_WB_csr_funct3 == 2'b01) ? MEM_WB_csr_wdata :               // CSRRW
+    (MEM_WB_csr_funct3 == 2'b10) ? (WB_csr_cur | MEM_WB_csr_wdata) : // CSRRS
+    (MEM_WB_csr_funct3 == 2'b11) ? (WB_csr_cur & ~MEM_WB_csr_wdata) : // CSRRC
+                                    MEM_WB_csr_wdata;
+
+always @(posedge clk) begin
+    if (reset) begin
+        mstatus <= 32'h0;
+        mtvec   <= 32'h0;
+        mepc    <= 32'h0;
+        mcause  <= 32'h0;
+        cpu_in_interrupt <= 1'b0;
+    end else begin
+        // --- 硬件写入 (优先级最高) ---
+        if (interrupt_accept) begin
+            mepc        <= ID_PC;          // 保存 ID 级 PC
+            mcause      <= 32'h8000000B;   // 外部中断
+            mstatus[3]  <= 1'b0;           // 关 MIE
+            cpu_in_interrupt <= 1'b1;
+        end
+        else if (ID_is_ECALL && !pipeline_stall) begin
+            mepc        <= ID_PC;          // 保存 ECALL 的 PC
+            mcause      <= 32'h0000000B;   // ECALL from M-mode
+            mstatus[3]  <= 1'b0;           // 关 MIE
+            cpu_in_interrupt <= 1'b1;
+        end
+        else if (ID_is_MRET && !pipeline_stall) begin
+            mstatus[3]  <= 1'b1;           // 开 MIE
+            cpu_in_interrupt <= 1'b0;
+        end
+        // --- 软件写入 (CSRRW/CSRRS/CSRRC, WB 级) ---
+        else if (MEM_WB_is_CSR_write && MEM_WB_csr_do_write) begin
+            // mcause 在中断处理中禁止软件写入
+            if (MEM_WB_csr_addr == `CSR_mcause && cpu_in_interrupt) begin
+                ; // 忽略
+            end else begin
+                case (MEM_WB_csr_addr)
+                    `CSR_mstatus: mstatus <= WB_csr_write_val;
+                    `CSR_mtvec:   mtvec   <= WB_csr_write_val;
+                    `CSR_mepc:    mepc    <= WB_csr_write_val;
+                    `CSR_mcause:  mcause  <= WB_csr_write_val;
+                    default:      ;       // 未定义 CSR, 忽略
+                endcase
+            end
+        end
+    end
+end
+
 // =================== NPC 选择 (IF 级) ===================
-// 优先级: Load-Use 阻塞 > EX 跳转 > ID JAL > 默认 PC+4
-assign IF_NPC = (load_use_hazard) ? IF_PC :
-                (EX_taken)        ? EX_branch_target :
-                (ID_is_JAL)       ? ID_jal_target :
-                                    IF_pcplus4;
+// 优先级: Stall > MRET > Interrupt > ECALL > EX > JAL > PC+4
+assign IF_NPC = pipeline_stall   ? IF_PC :
+                ID_is_MRET       ? mepc_fwd :
+                interrupt_accept ? mtvec_base :
+                ID_is_ECALL      ? mtvec_base :       // ECALL → mtvec
+                EX_taken         ? EX_branch_target :
+                ID_is_JAL        ? ID_jal_target :
+                                   IF_pcplus4;
 
 // =================== 对外输出 (MEM 级信号) ===================
 assign Addr_out = EX_MEM_ALU_result;
