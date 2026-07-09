@@ -1,19 +1,10 @@
 /* main.c — 三中断验收: 定时器 + 按钮 + ECALL
  *
  * 中断区分: 读 COUNTER_STATUS(0xF0000018) 的 bit0 = counter0_OUT
- *   counter0_OUT=1 → 定时器中断 → reload counter
+ *   counter0_OUT=1 → 定时器中断 → reload COUTER
  *   counter0_OUT=0 → 按钮中断   → 无需 reload
  *
- * ECALL: mepc+=4 由 crt0.S trap_handler 处理, 这里只做业务逻辑
- *
- * SoC 外设:
- *   LED:           0xF0000000 (写)
- *   数码管:        0xE0000000 (写)
- *   Counter load:  0xF0000008 (写)
- *   Counter val:   0xF0000008 (读, 当前计数值)
- *   Counter status:0xF0000018 (读, bit0=counter0_OUT)
- *   SW:            0xF0000010 (读)
- *   BTN:           0xF0000014 (读)
+ * LED / SEG7 统一管理: 所有地方只改 led_state / seg7_state, 仅 main 写入硬件
  */
 
 #define CSR_MSTATUS  0x300
@@ -35,8 +26,6 @@
 
 #define csr_write(csr, val) \
     __asm__ volatile ("csrrw x0, %0, %1" :: "i"(csr), "r"(val) : "memory")
-#define csr_read(csr, dst) \
-    __asm__ volatile ("csrrw %0, %1, x0" : "=r"(dst) : "i"(csr))
 
 extern unsigned int _trap_vector;
 
@@ -44,28 +33,27 @@ volatile unsigned int timer_count = 0;
 volatile unsigned int btn_count   = 0;
 volatile unsigned int ecall_count = 0;
 
+// 全局状态: 中断 + main 共享, 仅 main 写入 LED/SEG7
+volatile unsigned int led_state  = 0xDEAD;
+volatile unsigned int seg7_state = 0;
+
 // ==== 中断处理 ====
 void c_interrupt_handler(void) {
     unsigned int mcause_val;
-    csr_read(0x342, mcause_val);  // CSR_MCAUSE
+    __asm__ volatile ("csrrw %0, 0x342, x0" : "=r"(mcause_val));
 
     if (mcause_val == 0x8000000B) {
-        // 读 counter 状态寄存器区分来源
-        unsigned int st = CSTATUS;  // bit0 = counter0_OUT
-
-        if (st & 0x1) {
+        if (CSTATUS & 0x1) {
             // === 定时器中断 ===
             timer_count++;
-            LED = timer_count;
-            SEG7 = timer_count & 0xFF;
-            COUNTER = 800;   // reload (~1ms in sim)
-
+            led_state  = (led_state & 0xFFFF0000) | (timer_count & 0xFFFF);
+            seg7_state = timer_count & 0xFFFF;
+            COUNTER = 800;   // reload (~1ms sim)
         } else {
             // === 按钮中断 ===
             btn_count++;
-            LED = (btn_count << 16) | BTN;
-            SEG7 = btn_count & 0xFF;
-            // 按钮中断不需要 reload counter
+            led_state  = ((btn_count & 0xFFFF) << 16) | (led_state & 0xFFFF);
+            seg7_state = btn_count & 0xFFFF;
         }
     }
 }
@@ -73,27 +61,19 @@ void c_interrupt_handler(void) {
 // ==== ECALL 处理 (mepc+=4 由 crt0.S 完成) ====
 void c_ecall_handler(void) {
     ecall_count++;
-    LED = (ecall_count << 16) | 0xEC00;
-    SEG7 = 0xEC00 | (ecall_count & 0xFF);
+    led_state  = ((ecall_count & 0xFFFF) << 16) | 0xEC00;
+    seg7_state = 0xEC00 | (ecall_count & 0xFF);
 }
 
 // ==== 主程序 ====
 int main(void) {
-    // 1. 设置中断向量 (硬件 CSR 转发已修复, 无需 barrier)
     csr_write(CSR_MTVEC, (unsigned int)&_trap_vector);
-
-    // 2. 启动定时器
-    COUNTER = 80;  // ~100us (仿真), 下板改 78000
-
-    // 3. 开中断
+    COUNTER = 80;   // 仿真用, 下板改 78000
     csr_write(CSR_MSTATUS, 0x8);
 
-    // 4. 初始显示
-    LED  = 0xDEAD;
-    SEG7 = 0x00000000;
+    LED  = led_state;
+    SEG7 = seg7_state;
 
-    // 5. 主循环 — 用 led_state 避免与中断的读-改-写竞态
-    volatile unsigned int led_state = 0xDEAD;
     unsigned int last_btn = 0;
 
     while (1) {
@@ -106,10 +86,10 @@ int main(void) {
         }
         last_btn = btn_val;
 
-        // 主循环只改低 16 位; 高 16 位由中断维护
-        led_state = (led_state & 0xFFFF0000) | (sw_val & 0xFFFF);
-        LED = led_state;
-        SEG7 = sw_val;
+        // 主循环更新低 16 位; 高 16 位由中断维护
+        led_state  = (led_state & 0xFFFF0000) | (sw_val & 0xFFFF);
+        LED        = led_state;
+        SEG7       = seg7_state;
     }
 
     return 0;
