@@ -1,0 +1,93 @@
+
+led_btn.elf:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+00000000 <start>:
+   0:	ff010113          	addi	sp,sp,-16
+   4:	00812623          	sw	s0,12(sp)
+   8:	01010413          	addi	s0,sp,16
+   c:	40000113          	li	sp,1024
+  10:	040000ef          	jal	ra,50 <main>
+  14:	00000013          	nop
+  18:	00c12403          	lw	s0,12(sp)
+  1c:	01010113          	addi	sp,sp,16
+  20:	00008067          	ret
+
+00000024 <delay>:
+  24:	ff010113          	addi	sp,sp,-16
+  28:	00012623          	sw	zero,12(sp)
+  2c:	00c12783          	lw	a5,12(sp)
+  30:	00a7dc63          	bge	a5,a0,48 <delay+0x24>
+  34:	00c12783          	lw	a5,12(sp)
+  38:	00178793          	addi	a5,a5,1
+  3c:	00f12623          	sw	a5,12(sp)
+  40:	00c12783          	lw	a5,12(sp)
+  44:	fea7c8e3          	blt	a5,a0,34 <delay+0x10>
+  48:	01010113          	addi	sp,sp,16
+  4c:	00008067          	ret
+
+00000050 <main>:
+  50:	fd010113          	addi	sp,sp,-48
+  54:	02112623          	sw	ra,44(sp)
+  58:	02912423          	sw	s1,40(sp)
+  5c:	03212223          	sw	s2,36(sp)
+  60:	03312023          	sw	s3,32(sp)
+  64:	01412e23          	sw	s4,28(sp)
+  68:	01512c23          	sw	s5,24(sp)
+  6c:	01612a23          	sw	s6,20(sp)
+  70:	01712823          	sw	s7,16(sp)
+  74:	01812623          	sw	s8,12(sp)
+  78:	00000a13          	li	s4,0
+  7c:	00000493          	li	s1,0
+  80:	00000793          	li	a5,0
+  84:	e00009b7          	lui	s3,0xe0000
+  88:	00100c13          	li	s8,1
+  8c:	00010b37          	lui	s6,0x10
+  90:	fffb0b13          	addi	s6,s6,-1 # ffff <_GLOBAL_OFFSET_TABLE_+0xfdbf>
+  94:	f0000bb7          	lui	s7,0xf0000
+  98:	0000cab7          	lui	s5,0xc
+  9c:	350a8a93          	addi	s5,s5,848 # c350 <_GLOBAL_OFFSET_TABLE_+0xc110>
+  a0:	0300006f          	j	d0 <main+0x80>
+  a4:	080a1263          	bnez	s4,128 <main+0xd8>
+  a8:	00269793          	slli	a5,a3,0x2
+  ac:	0167f7b3          	and	a5,a5,s6
+  b0:	00fba023          	sw	a5,0(s7) # f0000000 <_GLOBAL_OFFSET_TABLE_+0xeffffdc0>
+  b4:	00277713          	andi	a4,a4,2
+  b8:	08070463          	beqz	a4,140 <main+0xf0>
+  bc:	0ff6f693          	zext.b	a3,a3
+  c0:	00d9a023          	sw	a3,0(s3) # e0000000 <_GLOBAL_OFFSET_TABLE_+0xdffffdc0>
+  c4:	000a8513          	mv	a0,s5
+  c8:	f5dff0ef          	jal	ra,24 <delay>
+  cc:	00090793          	mv	a5,s2
+  d0:	0009a683          	lw	a3,0(s3)
+  d4:	0106d713          	srli	a4,a3,0x10
+  d8:	01f77913          	andi	s2,a4,31
+  dc:	fff7c793          	not	a5,a5
+  e0:	0127f7b3          	and	a5,a5,s2
+  e4:	fc0780e3          	beqz	a5,a4 <main+0x54>
+  e8:	0107f613          	andi	a2,a5,16
+  ec:	00060663          	beqz	a2,f8 <main+0xa8>
+  f0:	00148493          	addi	s1,s1,1
+  f4:	0ff4f493          	zext.b	s1,s1
+  f8:	0017f613          	andi	a2,a5,1
+  fc:	00060663          	beqz	a2,108 <main+0xb8>
+ 100:	fff48493          	addi	s1,s1,-1
+ 104:	0ff4f493          	zext.b	s1,s1
+ 108:	0047f613          	andi	a2,a5,4
+ 10c:	00163613          	seqz	a2,a2
+ 110:	40c00633          	neg	a2,a2
+ 114:	00c4f4b3          	and	s1,s1,a2
+ 118:	0087f793          	andi	a5,a5,8
+ 11c:	f80784e3          	beqz	a5,a4 <main+0x54>
+ 120:	001a4a13          	xori	s4,s4,1
+ 124:	f81ff06f          	j	a4 <main+0x54>
+ 128:	00f4f793          	andi	a5,s1,15
+ 12c:	00278793          	addi	a5,a5,2
+ 130:	00fc17b3          	sll	a5,s8,a5
+ 134:	0167f7b3          	and	a5,a5,s6
+ 138:	00fba023          	sw	a5,0(s7)
+ 13c:	f79ff06f          	j	b4 <main+0x64>
+ 140:	0099a023          	sw	s1,0(s3)
+ 144:	f81ff06f          	j	c4 <main+0x74>
