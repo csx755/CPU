@@ -1,10 +1,10 @@
-/* main.c — 三中断验收: 定时器 + 按钮 + ECALL
+/* main.c — 三中断下板验收
  *
- * 中断区分: 读 COUNTER_STATUS(0xF0000018) 的 bit0 = counter0_OUT
- *   counter0_OUT=1 → 定时器中断 → reload COUTER
- *   counter0_OUT=0 → 按钮中断   → 无需 reload
+ *  定时器: 自动周期触发 → LED 全亮 0xFFFFFFFF
+ *  按钮:   BTN[0..3] 按下 → LED=0x000B000X (X=按钮编号)
+ *  ECALL:  BTN[4] 按下 → LED=0xEEEEEEEE
  *
- * LED / SEG7 统一管理: 所有地方只改 led_state / seg7_state, 仅 main 写入硬件
+ * 下板: COUNTER 初值改为 80000 (~100ms), 仿真用 80
  */
 
 #define CSR_MSTATUS  0x300
@@ -29,13 +29,13 @@
 
 extern unsigned int _trap_vector;
 
+volatile unsigned int led_state  = 0x00000000;
+volatile unsigned int seg7_state = 0;
+
+// 中断/异常计数
 volatile unsigned int timer_count = 0;
 volatile unsigned int btn_count   = 0;
 volatile unsigned int ecall_count = 0;
-
-// 全局状态: 中断 + main 共享, 仅 main 写入 LED/SEG7
-volatile unsigned int led_state  = 0xDEAD;
-volatile unsigned int seg7_state = 0;
 
 // ==== 中断处理 ====
 void c_interrupt_handler(void) {
@@ -46,50 +46,55 @@ void c_interrupt_handler(void) {
         if (CSTATUS & 0x1) {
             // === 定时器中断 ===
             timer_count++;
-            led_state  = (led_state & 0xFFFF0000) | (timer_count & 0xFFFF);
+            led_state  = 0xFFFFFFFF;          // 全亮
             seg7_state = timer_count & 0xFFFF;
-            COUNTER = 800;   // reload (~1ms sim)
+            COUNTER = 800;                    // reload (下板改 80000)
         } else {
-            // === 按钮中断 ===
+            // === 按钮中断: 显示按钮编号 ===
+            unsigned int btn = BTN & 0x1F;    // 5 位按键
             btn_count++;
-            led_state  = ((btn_count & 0xFFFF) << 16) | (led_state & 0xFFFF);
-            seg7_state = btn_count & 0xFFFF;
+            led_state  = 0x000B0000 | btn;    // 0x000B000X
+            seg7_state = btn;
+            // 按钮不 reload timer
         }
     }
 }
 
-// ==== ECALL 处理 (mepc+=4 由 crt0.S 完成) ====
+// ==== ECALL 处理 ====
 void c_ecall_handler(void) {
     ecall_count++;
-    led_state  = ((ecall_count & 0xFFFF) << 16) | 0xEC00;
+    led_state  = 0xEEEEEEEE;                  // ECALL 特征
     seg7_state = 0xEC00 | (ecall_count & 0xFF);
 }
 
 // ==== 主程序 ====
 int main(void) {
     csr_write(CSR_MTVEC, (unsigned int)&_trap_vector);
-    COUNTER = 80;   // 仿真用, 下板改 78000
+    COUNTER = 80;   // 仿真用, 下板改 80000
     csr_write(CSR_MSTATUS, 0x8);
 
     LED  = led_state;
     SEG7 = seg7_state;
 
-    unsigned int last_btn = 0;
+    unsigned int last_btn4 = 0;
 
     while (1) {
         unsigned int sw_val  = SW;
         unsigned int btn_val = BTN;
 
-        // 按钮按下 → ECALL (演示特权中断)
-        if (btn_val != 0 && last_btn == 0) {
+        // BTN[4] 按下 → ECALL (特权中断)
+        if ((btn_val & 0x10) && !(last_btn4 & 0x10)) {
             __asm__ volatile ("ecall");
         }
-        last_btn = btn_val;
+        last_btn4 = btn_val;
 
-        // 主循环更新低 16 位; 高 16 位由中断维护
-        led_state  = (led_state & 0xFFFF0000) | (sw_val & 0xFFFF);
-        LED        = led_state;
-        SEG7       = seg7_state;
+        // 主循环恢复常态: 低 16 位 = 开关, 高 16 位 = 中断维护
+        if (!(CSTATUS & 0x1)) {
+            // 非中断时刻: 显示开关状态
+            led_state  = (led_state & 0xFFFF0000) | (sw_val & 0xFFFF);
+        }
+        LED  = led_state;
+        SEG7 = seg7_state;
     }
 
     return 0;
