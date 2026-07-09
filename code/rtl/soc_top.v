@@ -73,6 +73,7 @@ wire [31:0] reg_data_debug;     // 寄存器调试输出 (流水线暂不使用)
 // VRFC 前向声明 (用于端口连接后声明的信号)
 wire [9:0]  ram_addr;
 wire        counter0_out, counter1_out, counter2_out;
+wire        soc_int = counter0_out | (|BTN_OK);  // 组合中断: 定时器 + 按钮
 // [MIO 握手] 自环: CPU 发起访存即视为总线就绪
 assign MIO_ready = CPU_MIO;
 
@@ -137,14 +138,13 @@ assign CPU2IO = Data_out;                            // Peripheral_in = Cpu_data
 wire is_mem_range = (Addr_out[31:20] == 12'h000);   // 0x00000xxx → RAM
 assign data_ram_we = is_mem_range & mem_w;           // RAM 写使能
 assign ram_data_in = Data_out;                       // RAM 写数据直通
+assign ram_addr    = Addr_out[11:2];                 // RAM 地址 (旁路 MIO_BUS stub)
+assign Cpu_data4bus = is_mem_range ? douta : 32'b0;
 
 // GPIO/显示写使能也补全 (MIO_BUS stub 输出为 Z)
 assign GPIOFO    = is_gpio_range & (Addr_out[7:0] != 8'h08) & mem_w;  // 0xF 范围除 counter 外
 assign GPIOEO    = (Addr_out[31:28] == 4'b1110) & mem_w;              // 0xExxxxxxx
 wire  GPIOFO_mio, GPIOEO_mio;       // MIO stub outputs (sim=Z), bypassed
-
-// 组合中断: 定时器 + 按钮
-wire soc_int = counter0_out | (|BTN_OK);      // counter0 OR any button (组合中断)
 
 MIO_BUS U_MIO_BUS (
     .clk                (clk),          // — 系统时钟直连

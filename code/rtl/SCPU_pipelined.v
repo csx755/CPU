@@ -246,8 +246,8 @@ GRE_array #(.WIDTH(ID_EX_W)) ID_EX (
 // 类似 alu_A 的三级前递, 但增加了 EX 级组合前递 (因消费者在 ID 而非 EX)
 wire ex_fwd_csr1 = ID_EX_RegWrite && (ID_EX_rd != 5'd0) && (ID_EX_rd == rs1);
 wire ex_fwd_csr2 = EX_MEM_RegWrite && (EX_MEM_rd != 5'd0) && (EX_MEM_rd == rs1);
-wire [31:0] ID_csr_wdata = ex_fwd_csr2 ? EX_MEM_ALU_result :
-                            ex_fwd_csr1 ? EX_ALU_result :
+wire [31:0] ID_csr_wdata = ex_fwd_csr1 ? EX_ALU_result :       // ID_EX 优先 (更新)
+                            ex_fwd_csr2 ? EX_MEM_ALU_result :
                                           ID_RD1;  // 含 WB→ID 前递
 
 assign ID_EX_in = {
