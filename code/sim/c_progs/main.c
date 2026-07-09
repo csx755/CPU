@@ -88,10 +88,11 @@ int main(void) {
         }
         last_btn4 = btn_val;
 
-        // 主循环恢复常态: 低 16 位 = 开关, 高 16 位 = 中断维护
-        if (!(CSTATUS & 0x1)) {
-            // 非中断时刻: 显示开关状态
-            led_state  = (led_state & 0xFFFF0000) | (sw_val & 0xFFFF);
+        // 仅高 16 位全是 F 或 E 时, 被中断占据, 主循环不改
+        // 否则低 16 位显示开关状态
+        unsigned int hi = led_state >> 16;
+        if (!(hi == 0xFFFF || hi == 0xEEEE || hi == 0x000B)) {
+            led_state = (led_state & 0xFFFF0000) | (sw_val & 0xFFFF);
         }
         LED  = led_state;
         SEG7 = seg7_state;
