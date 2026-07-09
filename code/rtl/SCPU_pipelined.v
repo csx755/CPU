@@ -250,6 +250,13 @@ wire [31:0] ID_csr_wdata = ex_fwd_csr1 ? EX_ALU_result :       // ID_EX 优先 (
                             ex_fwd_csr2 ? EX_MEM_ALU_result :
                                           ID_RD1;  // 含 WB→ID 前递
 
+// store_fwd: rs2 前递 (SW rs2 与 LI/ADDI 等背靠背时, ID_RD2 读到旧值)
+wire store_fwd_ex  = ID_EX_RegWrite && (ID_EX_rd != 5'd0) && (ID_EX_rd == rs2);
+wire store_fwd_mem = EX_MEM_RegWrite && (EX_MEM_rd != 5'd0) && (EX_MEM_rd == rs2) && ~store_fwd_ex;
+wire [31:0] ID_RD2_fwd = store_fwd_ex  ? EX_ALU_result :
+                           store_fwd_mem ? EX_MEM_ALU_result :
+                                           ID_RD2;
+
 assign ID_EX_in = {
     ID_RegWrite, ID_MemWrite, ID_ALUSrc,          //  3 bits [303:301]
     ID_WDSel,                                      //  2 bits [300:299]
@@ -258,7 +265,7 @@ assign ID_EX_in = {
     ID_branch_type,                                //  3 bits [294:292]
     ID_ALUOp,                                      //  5 bits [291:287]
     ID_RD1,                                        // 32 bits [286:255]
-    ID_RD2,                                        // 32 bits [254:223]
+    ID_RD2_fwd,                                    // 32 bits [254:223] (含 rs2 前递)
     ID_imm32,                                      // 32 bits [222:191]
     ID_PC,                                         // 32 bits [190:159]
     ID_pcplus4,                                    // 32 bits [158:127]
