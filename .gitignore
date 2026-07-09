@@ -8,6 +8,7 @@
 *.jou
 *.log
 *.str
+/参考文件
 
 # 操作系统
 Thumbs.db

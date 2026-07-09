@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "vivado": {
+      "command": "D:\\ProgramData\\miniconda3\\envs\\claude_env\\Scripts\\vivado-mcp",
+      "env": {
+        "VIVADO_PATH": "C:\\Users\\34955\\Program\\Vivado\\2021.2\\bin\\vivado.bat"
+      }
+    }
+  }
+}
