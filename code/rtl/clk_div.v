@@ -1,5 +1,6 @@
 `timescale 1ns / 1ps
-`define SIM 1
+// SIM 宏由 Vivado fileset VERILOG_DEFINE 控制, 不在此处定义
+// (此处定义会泄露到所有后续编译文件, 导致综合时 MIO_BUS bypass 也被激活)
 module clk_div(
     input               clk,
     input               rst,
