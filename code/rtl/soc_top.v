@@ -139,7 +139,15 @@ wire is_mem_range = (Addr_out[31:20] == 12'h000);   // 0x00000xxx → RAM
 assign data_ram_we = is_mem_range & mem_w;           // RAM 写使能
 assign ram_data_in = Data_out;                       // RAM 写数据直通
 assign ram_addr    = Addr_out[11:2];                 // RAM 地址 (旁路 MIO_BUS stub)
-assign Cpu_data4bus = is_mem_range ? douta : 32'b0;
+// 读数据 bypass: RAM / 外设
+wire is_periph_rd = (Addr_out[31:28] == 4'b1111);  // 0xFxxxxxxx
+assign Cpu_data4bus = is_mem_range ? douta :
+                      is_periph_rd ?
+                        ((Addr_out[7:0] == 8'h10) ? {16'b0, SW_OK} :      // SW
+                         (Addr_out[7:0] == 8'h14) ? {27'b0, BTN_OK} :     // BTN
+                         (Addr_out[7:0] == 8'h18) ? {31'b0, counter0_out} : // Timer status
+                         (Addr_out[7:0] == 8'h08) ? counter_out :          // Counter value
+                         32'b0) : 32'b0;
 
 // GPIO/显示写使能也补全 (MIO_BUS stub 输出为 Z)
 assign GPIOFO    = is_gpio_range & (Addr_out[7:0] != 8'h08) & mem_w;  // 0xF 范围除 counter 外
