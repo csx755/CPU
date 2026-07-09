@@ -128,7 +128,6 @@ wire        counter_we;          // 仿真=assign, 综合=MIO_BUS.edf 输出
 wire [1:0]  counter_ch;          // 仿真=assign, 综合=MIO_BUS.edf 输出
 wire        data_ram_we;            // wea_mio
 wire [31:0] Cpu_data4bus;           // — dm_controller.Data_read_from_dm
-wire        CPU2IO_mio;             // MIO_BUS stub Z → 断开
 
 // MIO_BUS 仿真 bypass: MIO_BUS.V 是 synthesis stub, 仿真时输出全 Z
 // 下板综合时 MIO_BUS 使用 .edf 网表, 不需要 bypass
@@ -151,7 +150,6 @@ assign Cpu_data4bus  = is_mem_range ? douta :
 assign GPIOFO        = is_gpio_range & (Addr_out[7:0] != 8'h08) & mem_w;
 assign GPIOEO        = (Addr_out[31:28] == 4'b1110) & mem_w;
 `endif
-wire GPIOFO_mio, GPIOEO_mio;  // MIO stub outputs, 仿真时 Z 不驱动
 
 MIO_BUS U_MIO_BUS (
     .clk                (clk),          // — 系统时钟直连
@@ -172,10 +170,10 @@ MIO_BUS U_MIO_BUS (
     .ram_data_in        (ram_data_in),
     .ram_addr           (ram_addr),
     .data_ram_we        (data_ram_we),      // — wea_mio (中间信号)
-    .GPIOf0000000_we    (GPIOFO_mio),       // — stub Z, 由上方 assign 覆盖
-    .GPIOe0000000_we    (GPIOEO_mio),       // — stub Z, 由上方 assign 覆盖
-    .counter_we         (counter_we),       // 仿真=Z+assign, 综合=.edf
-    .Peripheral_in      (CPU2IO_mio)        // — stub Z, 由上方 assign 覆盖
+    .GPIOf0000000_we    (GPIOFO),            // 仿真=Z+assign, 综合=.edf
+    .GPIOe0000000_we    (GPIOEO),            // 仿真=Z+assign, 综合=.edf
+    .counter_we         (counter_we),        // 仿真=Z+assign, 综合=.edf
+    .Peripheral_in      (CPU2IO)             // 仿真=Z+assign, 综合=.edf
 );
 
 // =============================================================================
