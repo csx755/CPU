@@ -1,0 +1,15 @@
+# Simulation output files (large)
+*.vcd
+*.wdb
+*.wcfg
+
+# Vivado generated files
+project_next.cache/
+project_next.gen/
+project_next.ip_user_files/
+project_next.runs/
+project_next.sim/
+
+# Backup files
+*.bak
+*.orig
